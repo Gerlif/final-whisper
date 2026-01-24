@@ -4,7 +4,10 @@ Final Whisper - AI-powered transcription with smart subtitle formatting
 By Final Film
 """
 
-VERSION = "1.00"
+VERSION = "1.01"
+GITHUB_REPO = "Gerlif/final-whisper"
+UPDATE_CHECK_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/version.txt"
+RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
 
 import tkinter as tk
 from tkinter import ttk, filedialog, scrolledtext, messagebox
@@ -754,6 +757,9 @@ class WhisperGUI:
         self.create_widgets()
         self.check_whisper_installation()
         self.check_gpu_availability()
+        
+        # Check for updates in background
+        self.check_for_updates()
     
     def set_window_icon(self):
         """Set the window icon"""
@@ -1270,6 +1276,55 @@ class WhisperGUI:
         
         # Play in background thread to not block UI
         threading.Thread(target=play, daemon=True).start()
+    
+    def check_for_updates(self):
+        """Check GitHub for newer version in background."""
+        def check():
+            try:
+                import urllib.request
+                import urllib.error
+                
+                # Fetch version.txt from GitHub
+                req = urllib.request.Request(
+                    UPDATE_CHECK_URL,
+                    headers={'User-Agent': 'Final-Whisper-Update-Checker'}
+                )
+                
+                with urllib.request.urlopen(req, timeout=5) as response:
+                    remote_version = response.read().decode('utf-8').strip()
+                
+                # Compare versions
+                if self._is_newer_version(remote_version, VERSION):
+                    # Show update prompt in main thread
+                    self.root.after(0, lambda: self._show_update_dialog(remote_version))
+            except Exception:
+                pass  # Silently fail - don't bother user if check fails
+        
+        threading.Thread(target=check, daemon=True).start()
+    
+    def _is_newer_version(self, remote, local):
+        """Compare version strings. Returns True if remote is newer."""
+        try:
+            remote_parts = [int(x) for x in remote.split('.')]
+            local_parts = [int(x) for x in local.split('.')]
+            return remote_parts > local_parts
+        except:
+            return False
+    
+    def _show_update_dialog(self, new_version):
+        """Show dialog offering to download update."""
+        result = messagebox.askyesno(
+            "Update Available",
+            f"A new version of Final Whisper is available!\n\n"
+            f"Current version: v{VERSION}\n"
+            f"New version: v{new_version}\n\n"
+            f"Would you like to open the download page?",
+            icon='info'
+        )
+        
+        if result:
+            import webbrowser
+            webbrowser.open(RELEASES_URL)
     
     def get_config_path(self):
         """Get path to config file"""
