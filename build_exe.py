@@ -11,14 +11,14 @@ from pathlib import Path
 
 def install_build_dependencies():
     """Install PyInstaller and other build dependencies"""
-    print("📦 Installing build dependencies...")
+    print(" Installing build dependencies...")
     
     deps = ["pyinstaller", "sv-ttk", "Pillow"]
     for dep in deps:
         print(f"  Installing {dep}...")
         subprocess.check_call([sys.executable, "-m", "pip", "install", dep, "--quiet"])
     
-    print("✅ Build dependencies installed\n")
+    print("OK - Build dependencies installed\n")
 
 def create_spec_file():
     """Create a PyInstaller spec file for more control"""
@@ -106,11 +106,11 @@ exe = EXE(
     with open('FinalWhisper.spec', 'w') as f:
         f.write(spec_content)
 
-    print("✅ Created FinalWhisper.spec\n")
+    print("OK - Created FinalWhisper.spec\n")
 
 def build_exe():
     """Build the EXE using PyInstaller"""
-    print("🔨 Building EXE...")
+    print(" Building EXE...")
     print("   This may take a few minutes...\n")
     
     result = subprocess.run([
@@ -124,13 +124,13 @@ def build_exe():
         exe_path = Path("dist/FinalWhisper.exe")
         if exe_path.exists():
             size_mb = exe_path.stat().st_size / (1024 * 1024)
-            print(f"\n✅ Build successful!")
+            print(f"\nOK - Build successful!")
             print(f"   Output: {exe_path.absolute()}")
             print(f"   Size: {size_mb:.1f} MB")
         else:
-            print("\n✅ Build completed - check dist/ folder")
+            print("\nOK - Build completed - check dist/ folder")
     else:
-        print("\n❌ Build failed!")
+        print("\nERROR - Build failed!")
         return False
     
     return True
@@ -186,7 +186,7 @@ Created by Final Film
     with open('dist/README.txt', 'w') as f:
         f.write(readme)
     
-    print("✅ Created dist/README.txt")
+    print("OK - Created dist/README.txt")
 
 def main():
     print("="*60)
@@ -195,7 +195,7 @@ def main():
     
     # Check if whisper_gui.py exists
     if not Path('whisper_gui.py').exists():
-        print("❌ Error: whisper_gui.py not found in current directory")
+        print("ERROR - Error: whisper_gui.py not found in current directory")
         print("   Please run this script from the same folder as whisper_gui.py")
         return 1
     
@@ -218,7 +218,7 @@ def main():
             print("  pip install torch --index-url https://download.pytorch.org/whl/cu118")
         
     except Exception as e:
-        print(f"\n❌ Build error: {e}")
+        print(f"\nERROR - Build error: {e}")
         return 1
     
     return 0
