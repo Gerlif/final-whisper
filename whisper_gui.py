@@ -1681,35 +1681,25 @@ print("OK")
                     # Create a batch script to replace the EXE after we exit
                     batch_script = f"""@echo off
 title Updating Final Whisper...
-echo.
-echo ========================================
-echo   Updating Final Whisper...
-echo ========================================
-echo.
-echo Waiting for application to close...
-timeout /t 5 /nobreak >nul
+echo Updating Final Whisper...
 
-echo Stopping any running instances...
+REM Wait for app to close
+timeout /t 2 /nobreak >nul
 taskkill /F /IM "FinalWhisper.exe" >nul 2>&1
-timeout /t 3 /nobreak >nul
-
-echo Replacing executable...
-del /F /Q "{current_exe}" 2>nul
 timeout /t 1 /nobreak >nul
+
+REM Replace executable
+del /F /Q "{current_exe}" 2>nul
 move /Y "{new_exe_path}" "{current_exe}"
 if errorlevel 1 (
-    echo.
-    echo ERROR: Failed to replace executable.
-    echo The file may be in use. Please try again.
+    echo ERROR: Update failed. Please try again.
     pause
     exit /b 1
 )
 
-echo.
-echo Update complete! Starting Final Whisper...
-timeout /t 2 /nobreak >nul
-start "" "{current_exe}"
+REM Start the updated app
 timeout /t 1 /nobreak >nul
+start "" "{current_exe}"
 del "%~f0"
 """
 
@@ -1931,7 +1921,7 @@ del "%~f0"
         
         # Create a proofreading script
         proofread_script = '''
-import sys, json, urllib.request, urllib.error, re
+import sys, json, urllib.request, urllib.error, re, time
 
 api_key = sys.argv[1]
 srt_file = sys.argv[2]
@@ -1998,14 +1988,32 @@ if total > BATCH_SIZE:
         batch_blocks = subtitle_blocks[batch_start:batch_end]
         batch_content = '\\n\\n'.join(batch_blocks)
         
-        try:
-            result = proofread_batch(batch_content, lang_name, api_key, context)
-            corrected_batch_blocks = re.split(r'\\n\\n+', result.strip())
-            corrected_blocks.extend(corrected_batch_blocks)
-            print(f"OK:{batch_num}", flush=True)
-        except Exception as e:
-            print(f"FAIL:{batch_num}:{e}", flush=True)
-            corrected_blocks.extend(batch_blocks)
+        # Retry logic for rate limits
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                result = proofread_batch(batch_content, lang_name, api_key, context)
+                corrected_batch_blocks = re.split(r'\\n\\n+', result.strip())
+                corrected_blocks.extend(corrected_batch_blocks)
+                print(f"OK:{batch_num}", flush=True)
+                break
+            except urllib.error.HTTPError as e:
+                if e.code == 429 and attempt < max_retries - 1:
+                    wait_time = 30 * (attempt + 1)  # 30s, 60s, 90s
+                    print(f"RATE_LIMIT:{batch_num}:Waiting {wait_time}s...", flush=True)
+                    time.sleep(wait_time)
+                else:
+                    print(f"FAIL:{batch_num}:{e}", flush=True)
+                    corrected_blocks.extend(batch_blocks)
+                    break
+            except Exception as e:
+                print(f"FAIL:{batch_num}:{e}", flush=True)
+                corrected_blocks.extend(batch_blocks)
+                break
+        
+        # Add delay between batches to avoid rate limits (except after last batch)
+        if batch_end < total:
+            time.sleep(2)
     
     corrected_content = '\\n\\n'.join(corrected_blocks) + '\\n'
 else:
@@ -2060,6 +2068,13 @@ print("DONE", flush=True)
                     batch_num, total_batches = parts[0], parts[1]
                     self._proofreading_batch_info = f"Batch {batch_num}/{total_batches}"
                     self.log(f"  Batch {batch_num}/{total_batches}...")
+                elif line.startswith('RATE_LIMIT:'):
+                    # Rate limit hit, waiting
+                    parts = line[11:].split(':', 1)
+                    batch_num = parts[0]
+                    message = parts[1] if len(parts) > 1 else "Waiting..."
+                    self._proofreading_batch_info = f"Batch {batch_num} - Rate limited, {message}"
+                    self.log(f"  ⏳ Batch {batch_num}: Rate limited, {message}")
                 elif line.startswith('OK:'):
                     pass  # Batch succeeded
                 elif line.startswith('FAIL:'):
