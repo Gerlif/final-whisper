@@ -1584,29 +1584,30 @@ class WhisperGUI:
                             ['py', '-c', f'''
 import urllib.request
 req = urllib.request.Request("{UPDATE_CHECK_URL}", headers={{"User-Agent": "Final-Whisper"}})
-with urllib.request.urlopen(req, timeout=5) as r:
+with urllib.request.urlopen(req, timeout=10) as r:
     print(r.read().decode("utf-8").strip())
 '''],
-                            capture_output=True, text=True, timeout=10
+                            capture_output=True, text=True, timeout=15
                         )
                         if result.returncode == 0 and result.stdout.strip():
                             remote_version = result.stdout.strip()
-                    except:
-                        pass
+                    except Exception as e:
+                        pass  # Silently fail
                 else:
                     import urllib.request
                     req = urllib.request.Request(
                         UPDATE_CHECK_URL,
                         headers={'User-Agent': 'Final-Whisper-Update-Checker'}
                     )
-                    with urllib.request.urlopen(req, timeout=5) as response:
+                    with urllib.request.urlopen(req, timeout=10) as response:
                         remote_version = response.read().decode('utf-8').strip()
                 
                 # Compare versions
-                if remote_version and self._is_newer_version(remote_version, VERSION):
-                    # Show update prompt in main thread
-                    self.root.after(0, lambda: self._show_update_dialog(remote_version))
-            except Exception:
+                if remote_version:
+                    if self._is_newer_version(remote_version, VERSION):
+                        # Show update prompt in main thread
+                        self.root.after(0, lambda: self._show_update_dialog(remote_version))
+            except Exception as e:
                 pass  # Silently fail - don't bother user if check fails
         
         threading.Thread(target=check, daemon=True).start()
@@ -1679,21 +1680,36 @@ print("OK")
 
                     # Create a batch script to replace the EXE after we exit
                     batch_script = f"""@echo off
-echo Updating Final Whisper...
+title Updating Final Whisper...
+echo.
+echo ========================================
+echo   Updating Final Whisper...
+echo ========================================
+echo.
 echo Waiting for application to close...
-timeout /t 3 /nobreak >nul
+timeout /t 5 /nobreak >nul
+
+echo Stopping any running instances...
 taskkill /F /IM "FinalWhisper.exe" >nul 2>&1
-timeout /t 2 /nobreak >nul
+timeout /t 3 /nobreak >nul
+
 echo Replacing executable...
-copy /Y "{new_exe_path}" "{current_exe}"
-if errorlevel 1 (
-    echo Failed to copy, trying move...
-    del "{current_exe}" 2>nul
-    move /Y "{new_exe_path}" "{current_exe}"
-)
-echo Update complete!
+del /F /Q "{current_exe}" 2>nul
 timeout /t 1 /nobreak >nul
+move /Y "{new_exe_path}" "{current_exe}"
+if errorlevel 1 (
+    echo.
+    echo ERROR: Failed to replace executable.
+    echo The file may be in use. Please try again.
+    pause
+    exit /b 1
+)
+
+echo.
+echo Update complete! Starting Final Whisper...
+timeout /t 2 /nobreak >nul
 start "" "{current_exe}"
+timeout /t 1 /nobreak >nul
 del "%~f0"
 """
 
