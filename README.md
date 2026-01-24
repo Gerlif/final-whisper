@@ -22,7 +22,7 @@ Final Whisper is a desktop application that automatically generates high-quality
 ### 🤖 AI-Powered Transcription
 - Multiple Whisper model support (tiny, base, small, medium, large, turbo)
 - GPU acceleration for faster processing
-- Multi-language support (optimized for Danish)
+- Multi-language support (optimized for English and Danish but supports all Whisper languages)
 - Real-time progress tracking with animated UI
 
 ### 🔍 AI Proofreading (Optional)
