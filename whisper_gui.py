@@ -1624,10 +1624,10 @@ with urllib.request.urlopen(req, timeout=5) as r:
             def download_and_replace():
                 try:
                     # Download the latest EXE
-                    download_url = f"https://github.com/{GITHUB_REPO}/releases/latest/download/Final Whisper.exe"
+                    download_url = f"https://github.com/{GITHUB_REPO}/releases/latest/download/FinalWhisper.exe"
 
                     temp_dir = tempfile.gettempdir()
-                    new_exe_path = os.path.join(temp_dir, "Final_Whisper_New.exe")
+                    new_exe_path = os.path.join(temp_dir, "FinalWhisper_New.exe")
 
                     # For frozen EXE, use subprocess to download (avoids SSL issues)
                     if getattr(sys, 'frozen', False):
@@ -1664,7 +1664,7 @@ print("OK")
                     batch_script = f"""@echo off
 echo Updating Final Whisper...
 timeout /t 2 /nobreak >nul
-taskkill /F /IM "Final Whisper.exe" >nul 2>&1
+taskkill /F /IM "FinalWhisper.exe" >nul 2>&1
 timeout /t 1 /nobreak >nul
 move /Y "{new_exe_path}" "{current_exe}"
 echo Update complete!

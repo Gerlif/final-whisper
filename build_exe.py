@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Build script for Final Film Subtitle Tool
+Build script for Final Whisper
 Creates a standalone EXE with bundled dependencies (except Whisper/PyTorch)
 """
 
@@ -86,7 +86,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='Final Whisper',
+    name='FinalWhisper',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -121,7 +121,7 @@ def build_exe():
     ], capture_output=False)
     
     if result.returncode == 0:
-        exe_path = Path("dist/Final Whisper.exe")
+        exe_path = Path("dist/FinalWhisper.exe")
         if exe_path.exists():
             size_mb = exe_path.stat().st_size / (1024 * 1024)
             print(f"\n✅ Build successful!")
@@ -154,7 +154,7 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 
 ## Usage
 
-1. Double-click `Final Whisper.exe`
+1. Double-click `FinalWhisper.exe`
 2. Select your video file
 3. Choose output folder
 4. Click "Start Transcription"
@@ -180,7 +180,7 @@ For GPU issues:
 - You can install GPU support using the "Setup GPU" button
 - Or manually: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 
-Created by Final Film (with AI assistance)
+Created by Final Film
 '''
     
     with open('dist/README.txt', 'w') as f:
@@ -211,7 +211,7 @@ def main():
             print("\n" + "="*60)
             print("  Build Complete!")
             print("="*60)
-            print("\nThe EXE is in the 'dist' folder.")
+            print("\nThe EXE is in the 'dist' folder: FinalWhisper.exe")
             print("Users will need to install Whisper separately:")
             print("  pip install openai-whisper")
             print("\nFor GPU support:")
