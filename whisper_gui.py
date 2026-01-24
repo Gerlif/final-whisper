@@ -58,23 +58,54 @@ def run_as_admin(install_gpu=False):
         if getattr(sys, 'frozen', False):
             # Running as EXE
             script = sys.executable
-            params = ""
+            params = " --install-gpu" if install_gpu else ""
         else:
             # Running as script
             script = sys.executable
             params = f'"{os.path.abspath(__file__)}"'
+            if install_gpu:
+                params += " --install-gpu"
 
-        # Add flag to auto-start GPU installation after elevation
-        if install_gpu:
-            params += " --install-gpu"
+        print(f"Requesting elevation: {script} {params}")
 
-        # Request elevation
-        ctypes.windll.shell32.ShellExecuteW(
-            None, "runas", script, params, None, 1
+        # Request elevation - returns HINSTANCE handle
+        # Return value > 32 = success, <= 32 = error code
+        result = ctypes.windll.shell32.ShellExecuteW(
+            None,       # hwnd
+            "runas",    # lpOperation
+            script,     # lpFile
+            params,     # lpParameters
+            None,       # lpDirectory
+            1           # nShowCmd (SW_SHOWNORMAL)
         )
-        return True
+
+        # Check if elevation was successful
+        if result > 32:
+            print(f"Elevation successful, handle: {result}")
+            return True
+        else:
+            error_codes = {
+                0: "Out of memory or resources",
+                2: "File not found",
+                3: "Path not found",
+                5: "Access denied",
+                8: "Out of memory",
+                26: "Sharing violation",
+                27: "File association incomplete or invalid",
+                28: "DDE timeout",
+                29: "DDE transaction failed",
+                30: "DDE busy",
+                31: "No file association",
+                32: "DDE failed"
+            }
+            error_msg = error_codes.get(result, f"Unknown error code: {result}")
+            print(f"Elevation failed: {error_msg}")
+            return False
+
     except Exception as e:
-        print(f"Failed to elevate privileges: {e}")
+        print(f"Exception during elevation: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 
@@ -820,12 +851,33 @@ class WhisperGUI:
         # Check for updates in background
         self.check_for_updates()
 
+        # Log startup diagnostics
+        self.log_startup_diagnostics()
+
         # Check if we were launched with --install-gpu flag (after admin elevation)
         if '--install-gpu' in sys.argv:
-            self.log("🔧 Auto-starting GPU installation (elevated privileges)")
-            # Give the UI time to load, then start installation
-            self.root.after(1000, self.install_cuda_pytorch_direct)
+            if is_admin():
+                self.log("🔧 Auto-starting GPU installation (elevated privileges)")
+                # Give the UI time to load, then start installation
+                self.root.after(1000, self.install_cuda_pytorch_direct)
+            else:
+                self.log("⚠️ WARNING: --install-gpu flag detected but NOT running as admin!")
+                self.log("This suggests the elevation failed. Installation will likely fail.")
+                messagebox.showwarning("Not Administrator",
+                    "The app was supposed to restart with admin rights, but elevation failed.\n\n"
+                    "GPU installation requires administrator privileges.\n\n"
+                    "Please right-click Final Whisper.exe and select 'Run as administrator'.")
     
+    def log_startup_diagnostics(self):
+        """Log diagnostic information at startup"""
+        self.log(f"Final Whisper v{VERSION}")
+        self.log(f"Running as: {'Administrator' if is_admin() else 'Standard User'}")
+        self.log(f"Python: {sys.version.split()[0]}")
+        self.log(f"Executable: {sys.executable}")
+        if '--install-gpu' in sys.argv:
+            self.log(f"Command-line args: {' '.join(sys.argv)}")
+        self.log("")  # Blank line for readability
+
     def set_window_icon(self):
         """Set the window icon"""
         try:
@@ -2067,14 +2119,22 @@ RULES:
             )
 
             if response:
+                self.log("🔐 Requesting administrator privileges...")
                 if run_as_admin(install_gpu=True):
                     # Successfully requested elevation, close this instance
-                    self.root.quit()
+                    self.log("✓ UAC prompt should appear - please approve")
+                    self.log("This window will close and reopen with admin rights...")
+                    self.root.after(1000, self.root.quit)  # Give time to read the message
                     return
                 else:
+                    self.log("❌ Failed to request administrator elevation")
                     messagebox.showerror("Elevation Failed",
                         "Could not restart as administrator.\n\n"
-                        "Please right-click the application and select 'Run as administrator'.")
+                        "This might happen if:\n"
+                        "• UAC is disabled\n"
+                        "• The EXE path contains special characters\n"
+                        "• Windows security settings block elevation\n\n"
+                        "Try: Right-click Final Whisper.exe → 'Run as administrator'")
                     return
             else:
                 # Show manual installation instructions
