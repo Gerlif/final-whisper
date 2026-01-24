@@ -28,6 +28,36 @@ def _get_version():
     return "1.02"  # Fallback version
 
 import sys  # Need this before _get_version for frozen check
+import os  # Need this for path operations
+
+# When running as frozen EXE, add system site-packages to sys.path
+# This allows the EXE to import whisper/torch from system installation
+if getattr(sys, 'frozen', False):
+    import site
+    import sysconfig
+
+    # Get system site-packages directories
+    site_packages = site.getsitepackages()
+    user_site = site.getusersitepackages()
+
+    # Add them to sys.path if not already there
+    for path in site_packages + [user_site]:
+        if path and os.path.exists(path) and path not in sys.path:
+            sys.path.append(path)
+
+    # Also try to find Python from PATH
+    try:
+        # Get the standard library path which will help us find site-packages
+        python_path = sysconfig.get_path('stdlib')
+        if python_path:
+            # Add the Lib/site-packages relative to stdlib
+            lib_dir = os.path.dirname(python_path)
+            sp = os.path.join(lib_dir, 'site-packages')
+            if os.path.exists(sp) and sp not in sys.path:
+                sys.path.append(sp)
+    except:
+        pass
+
 VERSION = _get_version()
 
 GITHUB_REPO = "Gerlif/final-whisper"
@@ -38,10 +68,40 @@ import tkinter as tk
 from tkinter import ttk, filedialog, scrolledtext, messagebox
 import subprocess
 import threading
-import os
+# import os - already imported at top for frozen EXE path setup
 from pathlib import Path
 import re
 import ctypes
+
+
+def get_python_executable():
+    """Get the Python executable path - handles both script and frozen EXE"""
+    if getattr(sys, 'frozen', False):
+        # Running as frozen EXE - need to find system Python
+        import shutil
+
+        # Try common Python commands
+        for cmd in ['python', 'python3', 'py']:
+            python_path = shutil.which(cmd)
+            if python_path:
+                # Verify it's actually Python
+                try:
+                    result = subprocess.run(
+                        [python_path, '--version'],
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                    if result.returncode == 0 and 'Python' in result.stdout:
+                        return python_path
+                except:
+                    continue
+
+        # If we can't find Python, return None and we'll error later
+        return None
+    else:
+        # Running as script - use current Python
+        return sys.executable
 
 
 def is_admin():
@@ -2169,11 +2229,22 @@ RULES:
 
         self._installing_gpu = True
 
+        # Get the Python executable (important for frozen EXE)
+        python_exe = get_python_executable()
+        if not python_exe:
+            self.log("❌ ERROR: Could not find Python executable!")
+            self.log("Please ensure Python is installed and in your PATH.")
+            messagebox.showerror("Python Not Found",
+                "Could not find Python executable.\n\n"
+                "Please ensure Python is installed and in your system PATH.")
+            self._installing_gpu = False
+            return
+
         self.log("\n" + "="*60)
         self.log("Installing GPU-accelerated PyTorch...")
         self.log("="*60 + "\n")
         self.log(f"Admin status: {'Yes' if is_admin() else 'No'}")
-        self.log(f"Python executable: {sys.executable}\n")
+        self.log(f"Python executable: {python_exe}\n")
 
         def install():
             try:
@@ -2222,7 +2293,7 @@ RULES:
                 # Uninstall existing PyTorch
                 self.log("\nUninstalling CPU-only PyTorch...")
                 uninstall_result = subprocess.run(
-                    [sys.executable, "-m", "pip", "uninstall", "-y", "torch", "torchvision", "torchaudio"],
+                    [python_exe, "-m", "pip", "uninstall", "-y", "torch", "torchvision", "torchaudio"],
                     capture_output=True, text=True
                 )
                 if uninstall_result.returncode == 0:
@@ -2235,7 +2306,7 @@ RULES:
                 self.log("This will take several minutes - downloading ~2GB...\n")
 
                 install_cmd = [
-                    sys.executable, "-m", "pip", "install",
+                    python_exe, "-m", "pip", "install",
                     "torch", "torchvision", "torchaudio",
                     "--index-url", torch_index
                 ]
