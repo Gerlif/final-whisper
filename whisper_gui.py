@@ -4,7 +4,29 @@ Final Whisper - AI-powered transcription with smart subtitle formatting
 By Final Film
 """
 
-VERSION = "1.01"
+# Version is read from version.txt (for auto-increment via GitHub Actions)
+def _get_version():
+    try:
+        import os
+        # Check for version.txt in same directory as script or exe
+        if getattr(sys, 'frozen', False):
+            # Running as compiled EXE
+            base_path = os.path.dirname(sys.executable)
+        else:
+            # Running as script
+            base_path = os.path.dirname(os.path.abspath(__file__))
+        
+        version_file = os.path.join(base_path, 'version.txt')
+        if os.path.exists(version_file):
+            with open(version_file, 'r') as f:
+                return f.read().strip()
+    except:
+        pass
+    return "1.02"  # Fallback version
+
+import sys  # Need this before _get_version for frozen check
+VERSION = _get_version()
+
 GITHUB_REPO = "Gerlif/final-whisper"
 UPDATE_CHECK_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/version.txt"
 RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
@@ -15,7 +37,6 @@ import subprocess
 import threading
 import os
 from pathlib import Path
-import sys
 import re
 
 

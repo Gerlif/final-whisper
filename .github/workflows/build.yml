@@ -1,0 +1,91 @@
+name: Build EXE
+
+on:
+  # Build when a release is created
+  release:
+    types: [created]
+  # Or manually trigger from Actions tab
+  workflow_dispatch:
+  # Auto-increment version on push to main
+  push:
+    branches: [main]
+    paths:
+      - 'whisper_gui.py'
+      - 'logo.png'
+      - 'icon.ico'
+
+jobs:
+  # Auto-increment version on push
+  increment-version:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Increment version
+        run: |
+          # Read current version
+          CURRENT=$(cat version.txt | tr -d '[:space:]')
+          echo "Current version: $CURRENT"
+          
+          # Increment patch version (1.01 -> 1.02)
+          MAJOR=$(echo $CURRENT | cut -d. -f1)
+          MINOR=$(echo $CURRENT | cut -d. -f2)
+          NEW_MINOR=$((10#$MINOR + 1))
+          NEW_VERSION="$MAJOR.$(printf '%02d' $NEW_MINOR)"
+          
+          echo "New version: $NEW_VERSION"
+          echo $NEW_VERSION > version.txt
+      
+      - name: Commit new version
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add version.txt
+          git diff --staged --quiet || git commit -m "Auto-increment version to $(cat version.txt)"
+          git push
+
+  # Build EXE
+  build:
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install openai-whisper
+          pip install sv-ttk
+      
+      - name: Build EXE
+        run: |
+          pyinstaller --onefile --windowed --name "Final Whisper" --icon=icon.ico --add-data "logo.png;." --add-data "version.txt;." whisper_gui.py
+      
+      - name: Upload EXE to Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/Final Whisper.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Upload EXE as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Final-Whisper-EXE
+          path: dist/Final Whisper.exe
