@@ -41,6 +41,37 @@ import threading
 import os
 from pathlib import Path
 import re
+import ctypes
+
+
+def is_admin():
+    """Check if running with administrator privileges"""
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin()
+    except:
+        return False
+
+
+def run_as_admin():
+    """Restart the application with administrator privileges"""
+    try:
+        if getattr(sys, 'frozen', False):
+            # Running as EXE
+            script = sys.executable
+        else:
+            # Running as script
+            script = os.path.abspath(__file__)
+
+        params = ' '.join([script] + sys.argv[1:])
+
+        # Request elevation
+        ctypes.windll.shell32.ShellExecuteW(
+            None, "runas", sys.executable, params, None, 1
+        )
+        return True
+    except Exception as e:
+        print(f"Failed to elevate privileges: {e}")
+        return False
 
 
 class CollapsibleFrame(ttk.Frame):
@@ -1975,10 +2006,34 @@ RULES:
     
     def install_cuda_pytorch(self):
         """Install CUDA-enabled PyTorch"""
+        # Check for admin privileges
+        if not is_admin():
+            response = messagebox.askyesno(
+                "Administrator Access Required",
+                "Installing PyTorch requires administrator privileges.\n\n"
+                "Would you like to restart this application as administrator?\n\n"
+                "(The app will close and reopen with elevated privileges)"
+            )
+
+            if response:
+                if run_as_admin():
+                    # Successfully requested elevation, close this instance
+                    self.root.quit()
+                    return
+                else:
+                    messagebox.showerror("Elevation Failed",
+                        "Could not restart as administrator.\n\n"
+                        "Please right-click the application and select 'Run as administrator'.")
+                    return
+            else:
+                # Show manual installation instructions
+                self.show_manual_install_instructions()
+                return
+
         self.log("\n" + "="*60)
         self.log("Installing GPU-accelerated PyTorch...")
         self.log("="*60 + "\n")
-        
+
         def install():
             try:
                 # Detect CUDA version
@@ -2069,16 +2124,83 @@ RULES:
                     self.root.after(100, self.restart_application)
                 else:
                     self.log("\n❌ Installation failed!")
-                    messagebox.showerror("Installation Failed",
-                        "Failed to install GPU-accelerated PyTorch.\n\n"
-                        "Check the log for details.")
-                    
+                    self.log(f"Exit code: {process.returncode}")
+
+                    # Show detailed error with manual installation option
+                    self.root.after(0, lambda: self.show_manual_install_instructions(failed=True))
+
             except Exception as e:
                 self.log(f"\n❌ Error during installation: {str(e)}")
-                messagebox.showerror("Error", f"Installation error:\n{str(e)}")
+                import traceback
+                self.log(traceback.format_exc())
+                self.root.after(0, lambda: self.show_manual_install_instructions(failed=True, error=str(e)))
         
         threading.Thread(target=install, daemon=True).start()
-    
+
+    def show_manual_install_instructions(self, failed=False, error=None):
+        """Show manual installation instructions"""
+        # Detect CUDA version for the command
+        cuda_version = None
+        try:
+            result = subprocess.run(['nvidia-smi'], capture_output=True, text=True, timeout=5,
+                                  creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0)
+            if result.returncode == 0:
+                import re
+                for line in result.stdout.split('\n'):
+                    if 'CUDA Version' in line:
+                        match = re.search(r'CUDA Version:\s*(\d+\.\d+)', line)
+                        if match:
+                            cuda_version = match.group(1)
+                            break
+        except:
+            pass
+
+        # Determine PyTorch index URL
+        if cuda_version:
+            cuda_major = int(cuda_version.split('.')[0])
+            if cuda_major >= 12:
+                torch_index = "https://download.pytorch.org/whl/cu121"
+                cuda_label = "CUDA 12.1"
+            else:
+                torch_index = "https://download.pytorch.org/whl/cu118"
+                cuda_label = "CUDA 11.8"
+        else:
+            torch_index = "https://download.pytorch.org/whl/cu118"
+            cuda_label = "CUDA 11.8"
+
+        install_cmd = f'pip install torch torchvision torchaudio --index-url {torch_index}'
+
+        if failed:
+            title = "Installation Failed"
+            message = f"Automatic installation failed.\n\n"
+            if error:
+                message += f"Error: {error}\n\n"
+            message += "Please try installing manually:\n\n"
+        else:
+            title = "Manual Installation"
+            message = "To install GPU-accelerated PyTorch manually:\n\n"
+
+        message += f"1. Open Command Prompt as Administrator\n"
+        message += f"2. Run this command:\n\n"
+        message += f"{install_cmd}\n\n"
+        message += f"3. Restart Final Whisper\n\n"
+        message += f"Would you like to copy the command to clipboard?"
+
+        response = messagebox.askyesno(title, message)
+
+        if response:
+            # Copy command to clipboard
+            try:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(install_cmd)
+                self.root.update()
+                messagebox.showinfo("Copied",
+                    "Installation command copied to clipboard!\n\n"
+                    "Paste it into Command Prompt (run as Administrator).")
+                self.log(f"\n📋 Command copied to clipboard: {install_cmd}")
+            except Exception as e:
+                messagebox.showerror("Copy Failed", f"Could not copy to clipboard:\n{e}")
+
     def manual_gpu_setup(self):
         """Manually trigger GPU setup"""
         if self.check_nvidia_gpu():
