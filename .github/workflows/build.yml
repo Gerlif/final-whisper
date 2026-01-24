@@ -33,7 +33,43 @@ jobs:
       
       - name: Build EXE
         run: |
-          pyinstaller --onefile --windowed --name "FinalWhisper" --icon=icon.ico --add-data "logo.png;." --add-data "icon.ico;." --add-data "version.txt;." whisper_gui.py
+          python -c "
+          import sv_ttk
+          import os
+          sv_ttk_path = os.path.dirname(sv_ttk.__file__)
+          spec = '''# -*- mode: python ; coding: utf-8 -*-
+          import sv_ttk
+          import os
+          sv_ttk_path = os.path.dirname(sv_ttk.__file__)
+          a = Analysis(
+              ['whisper_gui.py'],
+              pathex=[],
+              binaries=[],
+              datas=[
+                  (r\"''' + sv_ttk_path + '''\", 'sv_ttk'),
+                  ('icon.ico', '.'),
+                  ('logo.png', '.'),
+                  ('version.txt', '.'),
+              ],
+              hiddenimports=['sv_ttk', 'PIL', 'PIL.Image', 'PIL.ImageTk'],
+              excludes=['whisper', 'torch', 'torchaudio', 'torchvision', 'scipy', 'pandas', 'matplotlib', 'tensorflow', 'keras'],
+              noarchive=False,
+          )
+          pyz = PYZ(a.pure)
+          exe = EXE(
+              pyz, a.scripts, a.binaries, a.datas, [],
+              name=\"FinalWhisper\",
+              debug=False,
+              strip=False,
+              upx=True,
+              console=False,
+              icon=\"icon.ico\",
+          )
+          '''
+          with open('FinalWhisper.spec', 'w') as f:
+              f.write(spec)
+          "
+          pyinstaller FinalWhisper.spec --clean --noconfirm
       
       - name: Upload EXE to Release
         if: github.event_name == 'release'

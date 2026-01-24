@@ -1232,18 +1232,35 @@ class WhisperGUI:
             if hasattr(sys, '_MEIPASS'):
                 logo_paths.insert(0, os.path.join(sys._MEIPASS, 'logo.png'))
             
+            logo_loaded = False
             for logo_path in logo_paths:
                 if os.path.exists(logo_path):
-                    from PIL import Image, ImageTk
-                    img = Image.open(logo_path)
-                    # Resize to ~65% of original (was 180x65, now ~117x42)
-                    new_width = int(img.width * 0.65)
-                    new_height = int(img.height * 0.65)
-                    img = img.resize((new_width, new_height), Image.LANCZOS)
-                    self.logo_image = ImageTk.PhotoImage(img)
-                    logo_label = ttk.Label(header_frame, image=self.logo_image)
-                    logo_label.pack(side=tk.LEFT, padx=(0, 15), pady=(5, 5))
-                    break
+                    try:
+                        from PIL import Image, ImageTk
+                        img = Image.open(logo_path)
+                        # Resize to ~65% of original (was 180x65, now ~117x42)
+                        new_width = int(img.width * 0.65)
+                        new_height = int(img.height * 0.65)
+                        img = img.resize((new_width, new_height), Image.LANCZOS)
+                        self.logo_image = ImageTk.PhotoImage(img)
+                        logo_label = ttk.Label(header_frame, image=self.logo_image)
+                        logo_label.pack(side=tk.LEFT, padx=(0, 15), pady=(5, 5))
+                        logo_loaded = True
+                        break
+                    except ImportError:
+                        # PIL not available, try with tk.PhotoImage (PNG only, no resize)
+                        try:
+                            self.logo_image = tk.PhotoImage(file=logo_path)
+                            # Subsample to make it smaller (approximate 65% reduction)
+                            self.logo_image = self.logo_image.subsample(2, 2)
+                            logo_label = ttk.Label(header_frame, image=self.logo_image)
+                            logo_label.pack(side=tk.LEFT, padx=(0, 15), pady=(5, 5))
+                            logo_loaded = True
+                            break
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
         except Exception:
             pass  # Logo is optional
         
@@ -1663,12 +1680,19 @@ print("OK")
                     # Create a batch script to replace the EXE after we exit
                     batch_script = f"""@echo off
 echo Updating Final Whisper...
-timeout /t 2 /nobreak >nul
+echo Waiting for application to close...
+timeout /t 3 /nobreak >nul
 taskkill /F /IM "FinalWhisper.exe" >nul 2>&1
-timeout /t 1 /nobreak >nul
-move /Y "{new_exe_path}" "{current_exe}"
-echo Update complete!
 timeout /t 2 /nobreak >nul
+echo Replacing executable...
+copy /Y "{new_exe_path}" "{current_exe}"
+if errorlevel 1 (
+    echo Failed to copy, trying move...
+    del "{current_exe}" 2>nul
+    move /Y "{new_exe_path}" "{current_exe}"
+)
+echo Update complete!
+timeout /t 1 /nobreak >nul
 start "" "{current_exe}"
 del "%~f0"
 """
@@ -1677,18 +1701,21 @@ del "%~f0"
                     with open(batch_path, 'w') as f:
                         f.write(batch_script)
 
-                    # Show message and exit
-                    self.root.after(0, lambda: messagebox.showinfo(
-                        "Update Ready",
-                        f"Final Whisper v{self.new_version} has been downloaded!\n\n"
-                        "The application will now close and update.\n"
-                        "It will restart automatically after the update."
-                    ))
-
-                    # Launch update script and exit
-                    subprocess.Popen(['cmd', '/c', batch_path],
-                                   creationflags=subprocess.CREATE_NO_WINDOW)
-                    self.root.after(100, self.root.quit)
+                    # Show message and wait for user to click OK before exiting
+                    def show_and_exit():
+                        messagebox.showinfo(
+                            "Update Ready",
+                            f"Final Whisper v{self.new_version} has been downloaded!\n\n"
+                            "The application will now close and update.\n"
+                            "It will restart automatically after the update.\n\n"
+                            "Click OK to continue."
+                        )
+                        # Launch update script and exit AFTER user clicks OK
+                        subprocess.Popen(['cmd', '/c', batch_path],
+                                       creationflags=subprocess.CREATE_NO_WINDOW)
+                        self.root.quit()
+                    
+                    self.root.after(0, show_and_exit)
 
                 except Exception as e:
                     self.root.after(0, lambda: self.log(f"❌ Update failed: {e}"))
