@@ -1475,19 +1475,48 @@ del "%~f0"
     def restart_application(self):
         """Restart the application"""
         try:
+            import time
+
+            # Create a batch script to restart after this instance closes
             if getattr(sys, 'frozen', False):
-                # Running as EXE - restart it
-                subprocess.Popen([sys.executable])
+                exe_path = sys.executable
             else:
-                # Running as script - restart it
-                subprocess.Popen([sys.executable, __file__])
+                exe_path = sys.executable
+                script_path = __file__
+
+            # On Windows, use a batch file to restart
+            if os.name == 'nt':
+                import tempfile
+                batch_script = f"""@echo off
+echo Restarting Final Whisper...
+timeout /t 2 /nobreak >nul
+start "" "{exe_path}" {'' if getattr(sys, 'frozen', False) else f'"{script_path}"'}
+del "%~f0"
+"""
+                batch_path = os.path.join(tempfile.gettempdir(), "restart_final_whisper.bat")
+                with open(batch_path, 'w') as f:
+                    f.write(batch_script)
+
+                # Launch the restart script
+                subprocess.Popen(['cmd', '/c', batch_path],
+                               creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0)
+            else:
+                # On other platforms, just start a new instance
+                if getattr(sys, 'frozen', False):
+                    subprocess.Popen([exe_path])
+                else:
+                    subprocess.Popen([exe_path, script_path])
 
             # Close current instance
-            self.root.quit()
+            self.log("Closing application for restart...")
+            self.root.after(500, self.root.destroy)  # Use destroy instead of quit
+
         except Exception as e:
             self.log(f"❌ Failed to restart: {e}")
+            import traceback
+            self.log(traceback.format_exc())
             messagebox.showerror("Restart Failed",
-                f"Please manually restart the application.\n\nError: {e}")
+                f"Please manually close and restart the application.\n\nError: {e}")
 
     def get_config_path(self):
         """Get path to config file"""
@@ -1984,10 +2013,19 @@ RULES:
     
     def offer_gpu_setup(self):
         """Offer to install CUDA-enabled PyTorch"""
-        # Check if user previously declined or already completed setup
+        # Check if user previously declined, already completed setup, or recently attempted
         config = self.load_config()
-        if config.get('gpu_setup_declined', False) or config.get('gpu_setup_completed', False):
-            return  # Don't ask again
+        if config.get('gpu_setup_declined', False):
+            return  # User previously said no
+        if config.get('gpu_setup_completed', False):
+            return  # Setup already done
+
+        # Check if we attempted setup recently (within last 5 minutes)
+        import time
+        last_attempt = config.get('gpu_setup_last_attempt', 0)
+        if time.time() - last_attempt < 300:  # 5 minutes
+            self.log("⏳ GPU setup was recently attempted - skipping popup")
+            return  # Don't spam the user
 
         response = messagebox.askyesno(
             "GPU Setup Available",
@@ -1998,6 +2036,9 @@ RULES:
         )
 
         if response:
+            # Mark attempt time to prevent popup loop
+            config['gpu_setup_last_attempt'] = time.time()
+            self.save_config(config)
             self.install_cuda_pytorch()
         else:
             # User declined - remember this choice
@@ -2079,32 +2120,44 @@ RULES:
                 
                 # Uninstall existing PyTorch
                 self.log("\nUninstalling CPU-only PyTorch...")
-                subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", "torch", "torchvision", "torchaudio"],
-                             capture_output=True)
-                
+                uninstall_result = subprocess.run(
+                    [sys.executable, "-m", "pip", "uninstall", "-y", "torch", "torchvision", "torchaudio"],
+                    capture_output=True, text=True
+                )
+                if uninstall_result.returncode == 0:
+                    self.log("✓ Uninstall complete")
+                else:
+                    self.log(f"Note: Uninstall returned code {uninstall_result.returncode}")
+
                 # Install CUDA PyTorch
-                self.log(f"\nInstalling PyTorch from {torch_index}...")
-                self.log("This may take several minutes, please wait...\n")
-                
+                self.log(f"\nInstalling PyTorch with {torch_index.split('/')[-1]}...")
+                self.log("This will take several minutes - downloading ~2GB...\n")
+
                 install_cmd = [
                     sys.executable, "-m", "pip", "install",
                     "torch", "torchvision", "torchaudio",
                     "--index-url", torch_index
                 ]
-                
+
+                self.log(f"Running: {' '.join(install_cmd)}\n")
+
                 process = subprocess.Popen(
                     install_cmd,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
-                    bufsize=1
+                    bufsize=1,
+                    universal_newlines=True
                 )
-                
-                # Stream output
+
+                # Stream output with flush
                 for line in process.stdout:
-                    self.log(line.rstrip())
-                
+                    line = line.rstrip()
+                    if line:  # Only log non-empty lines
+                        self.root.after(0, lambda l=line: self.log(l))
+
                 process.wait()
+                self.log(f"\nPip install finished with code: {process.returncode}")
                 
                 if process.returncode == 0:
                     self.log("\n✅ GPU-accelerated PyTorch installed successfully!")
