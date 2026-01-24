@@ -33,7 +33,7 @@ jobs:
       
       - name: Build EXE
         run: |
-          pyinstaller --onefile --windowed --name "Final Whisper" --icon=icon.ico --add-data "logo.png;." --add-data "version.txt;." whisper_gui.py
+          pyinstaller --onefile --windowed --name "Final Whisper" --icon=icon.ico --add-data "logo.png;." --add-data "icon.ico;." --add-data "version.txt;." whisper_gui.py
       
       - name: Upload EXE to Release
         if: github.event_name == 'release'

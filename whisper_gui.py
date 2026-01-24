@@ -4,10 +4,96 @@ Final Whisper - AI-powered transcription with smart subtitle formatting
 By Final Film
 """
 
+import sys
+import os
+import subprocess
+
+# Helper function to run subprocess without visible console window
+def _run_hidden(cmd, **kwargs):
+    """Run subprocess without showing console window on Windows"""
+    startupinfo = None
+    creationflags = 0
+    if sys.platform == 'win32':
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        creationflags = subprocess.CREATE_NO_WINDOW
+    return subprocess.run(cmd, startupinfo=startupinfo, creationflags=creationflags, **kwargs)
+
+# Store found paths for debugging
+_found_site_packages = []
+
+# When running as frozen EXE, add system site-packages to sys.path FIRST
+# This allows the EXE to import whisper/torch from system installation
+if getattr(sys, 'frozen', False):
+    def _add_system_packages():
+        """Add system Python site-packages and stdlib to path for frozen EXE"""
+        global _found_site_packages
+        
+        added_paths = []
+        
+        # Method 1: Ask Python directly where everything is
+        for python_cmd in ['py', 'python', 'python3']:
+            try:
+                # Get multiple paths in one call for efficiency
+                result = _run_hidden(
+                    [python_cmd, '-c', '''
+import site
+import sys
+import os
+
+# Print site-packages
+for p in site.getsitepackages():
+    print(p)
+    
+# Print user site-packages
+print(site.getusersitepackages())
+
+# Print stdlib path (for modules like timeit, etc)
+print(os.path.dirname(os.__file__))
+'''],
+                    capture_output=True, text=True, timeout=10
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    for path in result.stdout.strip().split('\n'):
+                        path = path.strip()
+                        if path and os.path.exists(path) and path not in sys.path:
+                            sys.path.insert(0, path)
+                            added_paths.append(path)
+                
+                if added_paths:
+                    break  # Found paths, stop trying other python commands
+            except Exception:
+                continue
+        
+        # Method 2: Try common locations as fallback
+        possible_paths = []
+        
+        for ver in ['312', '311', '310', '39']:
+            possible_paths.extend([
+                # Site-packages
+                os.path.expanduser(f'~\\AppData\\Local\\Programs\\Python\\Python{ver}\\Lib\\site-packages'),
+                os.path.expanduser(f'~\\AppData\\Roaming\\Python\\Python{ver}\\site-packages'),
+                f'C:\\Python{ver}\\Lib\\site-packages',
+                f'C:\\Program Files\\Python{ver}\\Lib\\site-packages',
+                # Standard library (for timeit, etc.)
+                os.path.expanduser(f'~\\AppData\\Local\\Programs\\Python\\Python{ver}\\Lib'),
+                f'C:\\Python{ver}\\Lib',
+                f'C:\\Program Files\\Python{ver}\\Lib',
+            ])
+        
+        for path in possible_paths:
+            if os.path.exists(path) and path not in sys.path:
+                sys.path.insert(0, path)
+                added_paths.append(path)
+        
+        _found_site_packages = added_paths
+    
+    _add_system_packages()
+
+
 # Version is read from version.txt (for auto-increment via GitHub Actions)
 def _get_version():
     try:
-        import os
         # Check for version.txt - handle both script and bundled EXE
         if getattr(sys, 'frozen', False):
             # Running as compiled EXE - check PyInstaller's temp folder first
@@ -25,38 +111,7 @@ def _get_version():
                 return f.read().strip()
     except:
         pass
-    return "1.02"  # Fallback version
-
-import sys  # Need this before _get_version for frozen check
-import os  # Need this for path operations
-
-# When running as frozen EXE, add system site-packages to sys.path
-# This allows the EXE to import whisper/torch from system installation
-if getattr(sys, 'frozen', False):
-    import site
-    import sysconfig
-
-    # Get system site-packages directories
-    site_packages = site.getsitepackages()
-    user_site = site.getusersitepackages()
-
-    # Add them to sys.path if not already there
-    for path in site_packages + [user_site]:
-        if path and os.path.exists(path) and path not in sys.path:
-            sys.path.append(path)
-
-    # Also try to find Python from PATH
-    try:
-        # Get the standard library path which will help us find site-packages
-        python_path = sysconfig.get_path('stdlib')
-        if python_path:
-            # Add the Lib/site-packages relative to stdlib
-            lib_dir = os.path.dirname(python_path)
-            sp = os.path.join(lib_dir, 'site-packages')
-            if os.path.exists(sp) and sp not in sys.path:
-                sys.path.append(sp)
-    except:
-        pass
+    return "1.07"  # Fallback version
 
 VERSION = _get_version()
 
@@ -68,7 +123,6 @@ import tkinter as tk
 from tkinter import ttk, filedialog, scrolledtext, messagebox
 import subprocess
 import threading
-# import os - already imported at top for frozen EXE path setup
 from pathlib import Path
 import re
 import ctypes
@@ -380,43 +434,13 @@ class GradientProgressBar(tk.Canvas):
     
     def set_value(self, value):
         """Set the progress value (0-100)."""
-        self._value = max(0, min(self._maximum, value))
-        self._draw()
-    
-    def get_value(self):
-        """Get the current value."""
-        return self._value
-    
-    def configure(self, **kwargs):
-        """Configure the progress bar."""
-        if 'value' in kwargs:
-            self.set_value(kwargs.pop('value'))
-        super().configure(**kwargs)
-    
-    def config(self, **kwargs):
-        """Alias for configure."""
-        self.configure(**kwargs)
-    
-    def __setitem__(self, key, value):
-        """Allow setting value like progress['value'] = 50."""
-        if key == 'value':
-            self.set_value(value)
-        else:
-            super().__setitem__(key, value)
-    
-    def __getitem__(self, key):
-        """Allow getting value like progress['value']."""
-        if key == 'value':
-            return self._value
-        return super().__getitem__(key)
-
-
-def split_balanced_lines(text, max_chars):
-    
-    def set_value(self, value):
-        """Set the progress value (0-100)."""
-        self._value = max(0, min(self._maximum, value))
-        self._draw()
+        new_value = max(0, min(self._maximum, value))
+        # Only update if value changed by at least 1%
+        if abs(new_value - self._value) >= 1 or new_value == 0 or new_value >= self._maximum:
+            self._value = new_value
+            # Only redraw if not animating (animation will redraw anyway)
+            if not self._animating:
+                self._draw()
     
     def get_value(self):
         """Get the current value."""
@@ -882,7 +906,7 @@ class WhisperGUI:
         self.video_path = tk.StringVar()
         self.output_dir = tk.StringVar(value=str(Path.home() / "whisper_output"))
         self.language = tk.StringVar(value="da: Danish")
-        self.model = tk.StringVar(value="turbo")
+        self.model = tk.StringVar(value="large")
         self.max_line_count = tk.IntVar(value=2)
         self.use_word_timestamps = tk.BooleanVar(value=True)
         self.max_chars_per_line = tk.IntVar(value=40)
@@ -896,6 +920,12 @@ class WhisperGUI:
         self.last_progress_value = None
         self.last_audio_position = None
         self.last_audio_duration = None
+        self.transcription_process = None  # For subprocess transcription
+        
+        # Anti-hallucination settings
+        self.condition_on_previous_text = tk.BooleanVar(value=True)  # Default True (Whisper default)
+        self.no_speech_threshold = tk.DoubleVar(value=0.6)  # Default 0.6 (Whisper default)
+        self.hallucination_silence_threshold = tk.DoubleVar(value=0.0)  # Default 0 (disabled)
         
         # AI Proofreading settings
         self.use_ai_proofreading = tk.BooleanVar(value=False)
@@ -904,9 +934,13 @@ class WhisperGUI:
         # Load saved API key if exists
         self.load_api_key()
         
+        # Load saved settings (model, language, checkboxes, etc.)
+        self.load_settings()
+        
         self.create_widgets()
         self.check_whisper_installation()
-        self.check_gpu_availability()
+        # Note: check_gpu_availability() is called by check_whisper_installation() 
+        # after confirming Whisper is installed (or after Whisper is installed)
 
         # Check for updates in background
         self.check_for_updates()
@@ -931,15 +965,21 @@ class WhisperGUI:
     def log_startup_diagnostics(self):
         """Log diagnostic information at startup"""
         self.log(f"Final Whisper v{VERSION}")
-        self.log(f"Running as: {'Administrator' if is_admin() else 'Standard User'}")
-        self.log(f"Python: {sys.version.split()[0]}")
-        self.log(f"Executable: {sys.executable}")
+        
+        # Store debug info for error reporting but don't show by default
+        self._debug_info = {
+            'admin': is_admin(),
+            'python': sys.version.split()[0],
+            'executable': sys.executable,
+            'site_packages': _found_site_packages if getattr(sys, 'frozen', False) else []
+        }
+        
         if '--install-gpu' in sys.argv:
-            self.log(f"Command-line args: {' '.join(sys.argv)}")
+            self.log(f"Running as Administrator")
         self.log("")  # Blank line for readability
 
     def set_window_icon(self):
-        """Set the window icon"""
+        """Set the window icon (both title bar and taskbar)"""
         try:
             # Try to load icon from various locations
             import os
@@ -1208,17 +1248,18 @@ class WhisperGUI:
         content_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S))
         
         # Left column for settings
-        left_frame = ttk.Frame(content_frame)
-        left_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 15))
+        self.left_panel = ttk.Frame(content_frame)
+        self.left_panel.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 15))
+        left_frame = self.left_panel  # Alias for backward compatibility
         
         # Right column for log
         right_frame = ttk.Frame(content_frame)
         right_frame.grid(row=0, column=1, sticky=(tk.W, tk.E, tk.N, tk.S))
         
         # File selection (row 0)
-        file_section = CollapsibleFrame(left_frame, text="Files")
-        file_section.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
-        file_frame = file_section.content
+        self.files_section = CollapsibleFrame(left_frame, text="Files")
+        self.files_section.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
+        file_frame = self.files_section.content
         
         ttk.Label(file_frame, text="Video File:").grid(row=0, column=0, sticky=tk.W)
         ttk.Entry(file_frame, textvariable=self.video_path, width=38).grid(row=0, column=1, padx=8)
@@ -1229,9 +1270,9 @@ class WhisperGUI:
         ttk.Button(file_frame, text="Browse", command=self.browse_output).grid(row=1, column=2, pady=(8,0))
         
         # Transcription settings (row 1)
-        settings_section = CollapsibleFrame(left_frame, text="Transcription")
-        settings_section.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
-        settings_frame = settings_section.content
+        self.transcription_section = CollapsibleFrame(left_frame, text="Transcription")
+        self.transcription_section.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
+        settings_frame = self.transcription_section.content
         settings_frame.columnconfigure(1, weight=1)  # Make column 1 expand
         
         ttk.Label(settings_frame, text="Language:").grid(row=0, column=0, sticky=tk.W)
@@ -1281,18 +1322,40 @@ class WhisperGUI:
         ttk.Button(model_frame, text="Setup GPU", 
                   command=self.manual_gpu_setup).grid(row=1, column=3, padx=5, pady=(8,0))
         
-        # CUDA Toolkit button (only shown when GPU is available but CUDA toolkit is missing)
-        self.cuda_btn = ttk.Button(model_frame, text="Install CUDA Toolkit", 
-                                   command=self.offer_cuda_toolkit)
-        # Will be shown/hidden dynamically
+        # Anti-hallucination options (collapsed by default)
+        ttk.Separator(model_frame, orient='horizontal').grid(row=3, column=0, columnspan=4, sticky=(tk.W, tk.E), pady=(10, 5))
+        
+        ttk.Label(model_frame, text="Anti-hallucination:", font=("Segoe UI", 9, "bold")).grid(row=4, column=0, sticky=tk.W)
+        
+        # Condition on previous text checkbox
+        ttk.Checkbutton(model_frame, text="Condition on previous text", 
+                       variable=self.condition_on_previous_text).grid(row=5, column=0, columnspan=2, sticky=tk.W, pady=(4,0))
+        ttk.Label(model_frame, text="(uncheck to reduce hallucination cascades)", 
+                 font=("Segoe UI", 8)).grid(row=5, column=2, columnspan=2, sticky=tk.W, pady=(4,0))
+        
+        # No speech threshold
+        ttk.Label(model_frame, text="No speech threshold:").grid(row=6, column=0, sticky=tk.W, pady=(4,0))
+        no_speech_spin = ttk.Spinbox(model_frame, from_=0.0, to=1.0, increment=0.1, 
+                                     textvariable=self.no_speech_threshold, width=6)
+        no_speech_spin.grid(row=6, column=1, sticky=tk.W, padx=8, pady=(4,0))
+        ttk.Label(model_frame, text="(0.6 default, lower = more sensitive)", 
+                 font=("Segoe UI", 8)).grid(row=6, column=2, columnspan=2, sticky=tk.W, pady=(4,0))
+        
+        # Hallucination silence threshold  
+        ttk.Label(model_frame, text="Silence threshold:").grid(row=7, column=0, sticky=tk.W, pady=(4,0))
+        silence_spin = ttk.Spinbox(model_frame, from_=0.0, to=5.0, increment=0.5, 
+                                   textvariable=self.hallucination_silence_threshold, width=6)
+        silence_spin.grid(row=7, column=1, sticky=tk.W, padx=8, pady=(4,0))
+        ttk.Label(model_frame, text="(seconds, 0=off, try 2.0 if hallucinating)", 
+                 font=("Segoe UI", 8)).grid(row=7, column=2, columnspan=2, sticky=tk.W, pady=(4,0))
         
         # Initial model status update
         self.update_model_status()
         
         # Subtitle formatting settings (row 3)
-        format_section = CollapsibleFrame(left_frame, text="Subtitle Formatting", collapsed=True)
-        format_section.grid(row=3, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
-        format_frame = format_section.content
+        self.subtitle_section = CollapsibleFrame(left_frame, text="Subtitle Formatting", collapsed=True)
+        self.subtitle_section.grid(row=3, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
+        format_frame = self.subtitle_section.content
         
         ttk.Label(format_frame, text="Max chars/line:").grid(row=0, column=0, sticky=tk.W)
         ttk.Spinbox(format_frame, from_=30, to=50, textvariable=self.max_chars_per_line, 
@@ -1314,9 +1377,9 @@ class WhisperGUI:
         self.update_features_display()  # Set initial text
         
         # AI Proofreading section (row 4)
-        self.proofread_section = CollapsibleFrame(left_frame, text="AI Proofreading", collapsed=True)
-        self.proofread_section.grid(row=4, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
-        proofread_frame = self.proofread_section.content
+        self.ai_section = CollapsibleFrame(left_frame, text="AI Proofreading", collapsed=True)
+        self.ai_section.grid(row=4, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
+        proofread_frame = self.ai_section.content
         
         ttk.Checkbutton(proofread_frame, text="Enable AI proofreading (Claude Sonnet)", 
                        variable=self.use_ai_proofreading,
@@ -1423,11 +1486,11 @@ class WhisperGUI:
     
     def update_proofreading_status(self):
         """Update the AI Proofreading section header with on/off status"""
-        if hasattr(self, 'proofread_section'):
+        if hasattr(self, 'ai_section'):
             if self.use_ai_proofreading.get():
-                self.proofread_section.set_status("✓ ON")
+                self.ai_section.set_status("✓ ON")
             else:
-                self.proofread_section.set_status("OFF")
+                self.ai_section.set_status("OFF")
     
     def update_model_status(self):
         """Update the Model section header with model name and GPU status"""
@@ -1469,20 +1532,35 @@ class WhisperGUI:
         """Check GitHub for newer version in background."""
         def check():
             try:
-                import urllib.request
-                import urllib.error
+                remote_version = None
                 
-                # Fetch version.txt from GitHub
-                req = urllib.request.Request(
-                    UPDATE_CHECK_URL,
-                    headers={'User-Agent': 'Final-Whisper-Update-Checker'}
-                )
-                
-                with urllib.request.urlopen(req, timeout=5) as response:
-                    remote_version = response.read().decode('utf-8').strip()
+                # For frozen EXE, use subprocess to avoid SSL issues
+                if getattr(sys, 'frozen', False):
+                    try:
+                        result = _run_hidden(
+                            ['py', '-c', f'''
+import urllib.request
+req = urllib.request.Request("{UPDATE_CHECK_URL}", headers={{"User-Agent": "Final-Whisper"}})
+with urllib.request.urlopen(req, timeout=5) as r:
+    print(r.read().decode("utf-8").strip())
+'''],
+                            capture_output=True, text=True, timeout=10
+                        )
+                        if result.returncode == 0 and result.stdout.strip():
+                            remote_version = result.stdout.strip()
+                    except:
+                        pass
+                else:
+                    import urllib.request
+                    req = urllib.request.Request(
+                        UPDATE_CHECK_URL,
+                        headers={'User-Agent': 'Final-Whisper-Update-Checker'}
+                    )
+                    with urllib.request.urlopen(req, timeout=5) as response:
+                        remote_version = response.read().decode('utf-8').strip()
                 
                 # Compare versions
-                if self._is_newer_version(remote_version, VERSION):
+                if remote_version and self._is_newer_version(remote_version, VERSION):
                     # Show update prompt in main thread
                     self.root.after(0, lambda: self._show_update_dialog(remote_version))
             except Exception:
@@ -1511,9 +1589,7 @@ class WhisperGUI:
             return
 
         try:
-            import urllib.request
             import tempfile
-            import subprocess
 
             # Disable the update button during download
             self.update_button.config(state='disabled', text='⏳ Downloading update...')
@@ -1527,8 +1603,21 @@ class WhisperGUI:
                     temp_dir = tempfile.gettempdir()
                     new_exe_path = os.path.join(temp_dir, "Final_Whisper_New.exe")
 
-                    # Download with progress
-                    urllib.request.urlretrieve(download_url, new_exe_path)
+                    # For frozen EXE, use subprocess to download (avoids SSL issues)
+                    if getattr(sys, 'frozen', False):
+                        result = _run_hidden(
+                            ['py', '-c', f'''
+import urllib.request
+urllib.request.urlretrieve("{download_url}", r"{new_exe_path}")
+print("OK")
+'''],
+                            capture_output=True, text=True, timeout=300  # 5 min timeout
+                        )
+                        if result.returncode != 0 or "OK" not in result.stdout:
+                            raise Exception(f"Download failed: {result.stderr}")
+                    else:
+                        import urllib.request
+                        urllib.request.urlretrieve(download_url, new_exe_path)
 
                     self.root.after(0, lambda: self.log(f"✅ Downloaded successfully!"))
                     self.root.after(0, lambda: self.log(f"🔄 Installing update..."))
@@ -1668,6 +1757,79 @@ del "%~f0"
         except Exception as e:
             self.log(f"⚠️ Failed to save config: {e}")
 
+    def load_settings(self):
+        """Load user settings from config"""
+        try:
+            config = self.load_config()
+            
+            # Model settings
+            if 'model' in config:
+                self.model.set(config['model'])
+            if 'language' in config:
+                self.language.set(config['language'])
+            if 'use_gpu' in config:
+                self.use_gpu.set(config['use_gpu'])
+            
+            # Subtitle formatting
+            if 'max_chars_per_line' in config:
+                self.max_chars_per_line.set(config['max_chars_per_line'])
+            if 'max_line_count' in config:
+                self.max_line_count.set(config['max_line_count'])
+            if 'use_word_timestamps' in config:
+                self.use_word_timestamps.set(config['use_word_timestamps'])
+            
+            # Anti-hallucination settings
+            if 'condition_on_previous_text' in config:
+                self.condition_on_previous_text.set(config['condition_on_previous_text'])
+            if 'no_speech_threshold' in config:
+                self.no_speech_threshold.set(config['no_speech_threshold'])
+            if 'hallucination_silence_threshold' in config:
+                self.hallucination_silence_threshold.set(config['hallucination_silence_threshold'])
+            
+            # AI Proofreading
+            if 'use_ai_proofreading' in config:
+                self.use_ai_proofreading.set(config['use_ai_proofreading'])
+            
+            # Output directory
+            if 'output_dir' in config and config['output_dir']:
+                self.output_dir.set(config['output_dir'])
+                
+        except Exception as e:
+            pass  # Silently fail - will use defaults
+    
+    def save_settings(self):
+        """Save user settings to config"""
+        try:
+            config = self.load_config()
+            
+            # Model settings
+            config['model'] = self.model.get()
+            config['language'] = self.language.get()
+            config['use_gpu'] = self.use_gpu.get()
+            
+            # Subtitle formatting
+            config['max_chars_per_line'] = self.max_chars_per_line.get()
+            config['max_line_count'] = self.max_line_count.get()
+            config['use_word_timestamps'] = self.use_word_timestamps.get()
+            
+            # Anti-hallucination settings
+            config['condition_on_previous_text'] = self.condition_on_previous_text.get()
+            config['no_speech_threshold'] = self.no_speech_threshold.get()
+            config['hallucination_silence_threshold'] = self.hallucination_silence_threshold.get()
+            
+            # AI Proofreading
+            config['use_ai_proofreading'] = self.use_ai_proofreading.get()
+            
+            # Output directory (only save if not default)
+            output_dir = self.output_dir.get()
+            default_output = str(Path.home() / "whisper_output")
+            if output_dir != default_output:
+                config['output_dir'] = output_dir
+            
+            self.save_config(config)
+        except Exception as e:
+            pass  # Silently fail
+
     def load_api_key(self):
         """Load API key from config file"""
         try:
@@ -1688,6 +1850,164 @@ del "%~f0"
             self.log("✅ API key saved")
         except Exception as e:
             self.log(f"❌ Failed to save API key: {e}")
+    
+    def _proofread_via_subprocess(self, srt_file, language="da", context=""):
+        """Run AI proofreading via subprocess (for frozen EXE with SSL issues)"""
+        api_key = self.anthropic_api_key.get().strip()
+        if not api_key:
+            self.log("⚠️ No API key provided, skipping proofreading")
+            return None
+        
+        self.log("\n🔍 Starting AI proofreading...")
+        
+        # Create a proofreading script
+        proofread_script = '''
+import sys, json, urllib.request, urllib.error, re
+
+api_key = sys.argv[1]
+srt_file = sys.argv[2]
+language = sys.argv[3]
+context = sys.argv[4] if len(sys.argv) > 4 else ""
+
+# Language names
+lang_names = {'da': 'Danish', 'en': 'English', 'de': 'German', 'fr': 'French',
+              'es': 'Spanish', 'it': 'Italian', 'no': 'Norwegian', 'sv': 'Swedish'}
+lang_name = lang_names.get(language, language.title())
+
+# Read SRT file
+with open(srt_file, 'r', encoding='utf-8') as f:
+    srt_content = f.read()
+
+subtitle_blocks = re.split(r'\\n\\n+', srt_content.strip())
+total = len(subtitle_blocks)
+print(f"Found {total} subtitles", flush=True)
+
+BATCH_SIZE = 60
+corrected_blocks = []
+
+def proofread_batch(batch_content, lang_name, api_key, context):
+    system_prompt = f"""You are a professional subtitle proofreader for {lang_name} content.
+Fix grammar, spelling, and punctuation errors while preserving the SRT format exactly.
+Keep timestamps unchanged. Only fix the text content.
+Return ONLY the corrected SRT content, nothing else."""
+    
+    user_prompt = f"Proofread these {lang_name} subtitles"
+    if context:
+        user_prompt += f" (context: {context})"
+    user_prompt += f":\\n\\n{batch_content}"
+    
+    data = json.dumps({
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 8192,
+        "messages": [{"role": "user", "content": user_prompt}],
+        "system": system_prompt
+    }).encode('utf-8')
+    
+    req = urllib.request.Request(
+        "https://api.anthropic.com/v1/messages",
+        data=data,
+        headers={
+            "Content-Type": "application/json",
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01"
+        }
+    )
+    
+    with urllib.request.urlopen(req, timeout=120) as response:
+        result = json.loads(response.read().decode('utf-8'))
+        return result['content'][0]['text']
+
+if total > BATCH_SIZE:
+    print(f"Processing in batches of {BATCH_SIZE}...", flush=True)
+    total_batches = (total + BATCH_SIZE - 1) // BATCH_SIZE
+    
+    for batch_start in range(0, total, BATCH_SIZE):
+        batch_end = min(batch_start + BATCH_SIZE, total)
+        batch_num = (batch_start // BATCH_SIZE) + 1
+        print(f"BATCH:{batch_num}/{total_batches}", flush=True)
+        
+        batch_blocks = subtitle_blocks[batch_start:batch_end]
+        batch_content = '\\n\\n'.join(batch_blocks)
+        
+        try:
+            result = proofread_batch(batch_content, lang_name, api_key, context)
+            corrected_batch_blocks = re.split(r'\\n\\n+', result.strip())
+            corrected_blocks.extend(corrected_batch_blocks)
+            print(f"OK:{batch_num}", flush=True)
+        except Exception as e:
+            print(f"FAIL:{batch_num}:{e}", flush=True)
+            corrected_blocks.extend(batch_blocks)
+    
+    corrected_content = '\\n\\n'.join(corrected_blocks) + '\\n'
+else:
+    try:
+        corrected_content = proofread_batch(srt_content, lang_name, api_key, context)
+        print("OK:1", flush=True)
+    except Exception as e:
+        print(f"FAIL:1:{e}", flush=True)
+        corrected_content = srt_content
+
+# Write corrected content
+with open(srt_file, 'w', encoding='utf-8') as f:
+    f.write(corrected_content)
+
+print("DONE", flush=True)
+'''
+        
+        cmd = ['py', '-c', proofread_script, api_key, srt_file, language, context]
+        
+        # Hide console window
+        startupinfo = None
+        creationflags = 0
+        if os.name == 'nt':
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = subprocess.SW_HIDE
+            creationflags = subprocess.CREATE_NO_WINDOW
+        
+        try:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                startupinfo=startupinfo,
+                creationflags=creationflags
+            )
+            
+            for line in process.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                
+                if line.startswith('Found'):
+                    self.log(line)
+                elif line.startswith('Processing'):
+                    self.log(line)
+                elif line.startswith('BATCH:'):
+                    parts = line[6:].split('/')
+                    batch_num, total_batches = parts[0], parts[1]
+                    self._proofreading_batch_info = f"Batch {batch_num}/{total_batches}"
+                    self.log(f"  Batch {batch_num}/{total_batches}...")
+                elif line.startswith('OK:'):
+                    pass  # Batch succeeded
+                elif line.startswith('FAIL:'):
+                    parts = line[5:].split(':', 1)
+                    batch_num = parts[0]
+                    error = parts[1] if len(parts) > 1 else "Unknown error"
+                    self.log(f"  ⚠️ Batch {batch_num} failed: {error}")
+                elif line == 'DONE':
+                    self.log("✅ Proofreading complete!")
+            
+            process.wait()
+            self._proofreading_batch_info = None
+            return srt_file
+            
+        except Exception as e:
+            self.log(f"❌ Proofreading error: {e}")
+            return None
     
     def proofread_srt_with_ai(self, srt_file, language="da", context=""):
         """Use Claude API to proofread and fix the SRT file"""
@@ -1925,53 +2245,117 @@ RULES:
     
     def get_available_models(self):
         """Get list of available Whisper models dynamically"""
-        # Try to get models from whisper module
-        try:
-            import whisper
-            if hasattr(whisper, '_MODELS'):
-                # Get model names from whisper's internal list
-                models = list(whisper._MODELS.keys())
-                # Sort with turbo and larger models first
-                preferred_order = ['turbo', 'large-v3-turbo', 'large-v3', 'large-v2', 
-                                   'large-v1', 'large', 'medium', 'small', 'base', 'tiny']
-                sorted_models = []
-                for m in preferred_order:
-                    if m in models:
-                        sorted_models.append(m)
-                        models.remove(m)
-                # Add any remaining models not in our preferred order
-                sorted_models.extend(sorted(models, reverse=True))
-                return sorted_models
-        except ImportError:
-            pass
-        except Exception:
-            pass
+        # Preferred order: turbo and large at top, then specific versions
+        preferred_order = ['turbo', 'large', 'large-v3', 'large-v2', 'large-v1', 
+                          'medium', 'small', 'base', 'tiny']
+        
+        # For frozen EXE, use subprocess to query whisper
+        if getattr(sys, 'frozen', False):
+            try:
+                # Hide console window
+                startupinfo = None
+                creationflags = 0
+                if os.name == 'nt':
+                    startupinfo = subprocess.STARTUPINFO()
+                    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                    startupinfo.wShowWindow = subprocess.SW_HIDE
+                    creationflags = subprocess.CREATE_NO_WINDOW
+                
+                result = subprocess.run(
+                    ['py', '-c', 'import whisper; print(",".join(whisper._MODELS.keys()))'],
+                    capture_output=True, text=True, timeout=10,
+                    startupinfo=startupinfo, creationflags=creationflags
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    models = result.stdout.strip().split(',')
+                    sorted_models = []
+                    for m in preferred_order:
+                        if m in models:
+                            sorted_models.append(m)
+                            models.remove(m)
+                    # Add any remaining models
+                    sorted_models.extend(sorted(models, reverse=True))
+                    return sorted_models
+            except:
+                pass
+        else:
+            # Try to get models from whisper module directly
+            try:
+                import whisper
+                if hasattr(whisper, '_MODELS'):
+                    models = list(whisper._MODELS.keys())
+                    sorted_models = []
+                    for m in preferred_order:
+                        if m in models:
+                            sorted_models.append(m)
+                            models.remove(m)
+                    sorted_models.extend(sorted(models, reverse=True))
+                    return sorted_models
+            except:
+                pass
         
         # Fallback to known models if whisper not installed yet
-        return ["turbo", "large-v3", "large-v2", "large", "medium", "small", "base", "tiny"]
+        return ["turbo", "large", "large-v3", "large-v2", "medium", "small", "base", "tiny"]
     
     def get_available_languages(self):
         """Get list of available Whisper languages with display names"""
-        # Try to get languages from whisper module
-        try:
-            import whisper
-            if hasattr(whisper, 'tokenizer') and hasattr(whisper.tokenizer, 'LANGUAGES'):
-                languages = whisper.tokenizer.LANGUAGES
-                # Create list of "code: Name" entries, sorted by name
-                lang_list = [f"{code}: {name.title()}" for code, name in sorted(languages.items(), key=lambda x: x[1])]
-                # Move Danish and English to top
-                prioritized = []
-                for priority_code in ['da', 'en']:
-                    for lang in lang_list[:]:
-                        if lang.startswith(f"{priority_code}:"):
-                            prioritized.append(lang)
-                            lang_list.remove(lang)
-                            break
-                return prioritized + lang_list
-        except ImportError:
-            pass
-        except Exception:
-            pass
+        # For frozen EXE, use subprocess to query whisper
+        if getattr(sys, 'frozen', False):
+            try:
+                # Hide console window
+                startupinfo = None
+                creationflags = 0
+                if os.name == 'nt':
+                    startupinfo = subprocess.STARTUPINFO()
+                    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                    startupinfo.wShowWindow = subprocess.SW_HIDE
+                    creationflags = subprocess.CREATE_NO_WINDOW
+                
+                result = subprocess.run(
+                    ['py', '-c', '''
+import whisper
+langs = whisper.tokenizer.LANGUAGES
+for code, name in sorted(langs.items(), key=lambda x: x[1]):
+    print(f"{code}:{name}")
+'''],
+                    capture_output=True, text=True, timeout=10,
+                    startupinfo=startupinfo, creationflags=creationflags
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    lang_list = []
+                    for line in result.stdout.strip().split('\n'):
+                        if ':' in line:
+                            code, name = line.split(':', 1)
+                            lang_list.append(f"{code}: {name.title()}")
+                    
+                    # Move Danish and English to top
+                    prioritized = []
+                    for priority_code in ['da', 'en']:
+                        for lang in lang_list[:]:
+                            if lang.startswith(f"{priority_code}:"):
+                                prioritized.append(lang)
+                                lang_list.remove(lang)
+                                break
+                    return prioritized + lang_list
+            except:
+                pass
+        else:
+            # Try to get languages from whisper module directly
+            try:
+                import whisper
+                if hasattr(whisper, 'tokenizer') and hasattr(whisper.tokenizer, 'LANGUAGES'):
+                    languages = whisper.tokenizer.LANGUAGES
+                    lang_list = [f"{code}: {name.title()}" for code, name in sorted(languages.items(), key=lambda x: x[1])]
+                    prioritized = []
+                    for priority_code in ['da', 'en']:
+                        for lang in lang_list[:]:
+                            if lang.startswith(f"{priority_code}:"):
+                                prioritized.append(lang)
+                                lang_list.remove(lang)
+                                break
+                    return prioritized + lang_list
+            except:
+                pass
         
         # Fallback to common languages if whisper not installed yet
         return [
@@ -1992,26 +2376,37 @@ RULES:
     def check_whisper_installation(self):
         """Check if Whisper is installed and install if missing"""
         def check():
+            # For frozen EXE, use subprocess to avoid Python version conflicts
+            if getattr(sys, 'frozen', False):
+                try:
+                    result = _run_hidden(
+                        ['py', '-c', 'import whisper; print("OK")'],
+                        capture_output=True, text=True, timeout=30
+                    )
+                    if result.returncode == 0 and "OK" in result.stdout:
+                        self.log("✅ Whisper is installed")
+                        # Now check GPU availability
+                        self.root.after(0, self.check_gpu_availability)
+                        return
+                    else:
+                        self.log("⚠️ Whisper not found")
+                except subprocess.TimeoutExpired:
+                    self.log("⚠️ Whisper check timed out")
+                except Exception as e:
+                    self.log(f"⚠️ Whisper check error: {e}")
+                
+                # Offer to install Whisper
+                self.root.after(0, self._show_whisper_install_button)
+                return
+            
+            # Running as script - can import directly
             try:
                 import whisper
                 self.log("✅ Whisper is installed")
-            except ImportError:
+                # Now check GPU availability
+                self.root.after(0, self.check_gpu_availability)
+            except ImportError as e:
                 self.log("⚠️ Whisper not found")
-
-                # Don't try to auto-install when running as bundled EXE
-                if getattr(sys, 'frozen', False):
-                    self.log("Please install Whisper manually:")
-                    self.log("  pip install openai-whisper")
-                    self.root.after(0, lambda: messagebox.showwarning(
-                        "Whisper Not Installed",
-                        "OpenAI Whisper is not installed.\n\n"
-                        "Please open a command prompt and run:\n"
-                        "pip install openai-whisper\n\n"
-                        "Then restart Final Whisper."
-                    ))
-                    return
-
-                # Auto-install when running as script (development mode)
                 self.log("⚠️ Whisper not found - installing automatically...")
                 self.log("\n" + "="*60)
                 self.log("Installing OpenAI Whisper...")
@@ -2037,6 +2432,8 @@ RULES:
                     if process.returncode == 0:
                         self.log("\n✅ Whisper installed successfully!")
                         self.log("Ready to transcribe!\n")
+                        # Now check GPU availability
+                        self.root.after(0, self.check_gpu_availability)
                     else:
                         self.log("\n❌ Whisper installation failed!")
                         self.log("Please try manually: pip install --user openai-whisper\n")
@@ -2050,48 +2447,264 @@ RULES:
 
         threading.Thread(target=check, daemon=True).start()
     
+    def _show_whisper_install_button(self):
+        """Show a prominent button to install Whisper and disable the app until installed"""
+        # Collapse all sections
+        if hasattr(self, 'files_section'):
+            self.files_section.collapse()
+        if hasattr(self, 'transcription_section'):
+            self.transcription_section.collapse()
+        if hasattr(self, 'model_section'):
+            self.model_section.collapse()
+        if hasattr(self, 'subtitle_section'):
+            self.subtitle_section.collapse()
+        if hasattr(self, 'ai_section'):
+            self.ai_section.collapse()
+        
+        # Disable the start button
+        self.process_btn.config(state='disabled')
+        
+        # Hide all sections temporarily
+        if hasattr(self, 'files_section'):
+            self.files_section.grid_remove()
+        if hasattr(self, 'transcription_section'):
+            self.transcription_section.grid_remove()
+        if hasattr(self, 'model_section'):
+            self.model_section.grid_remove()
+        if hasattr(self, 'subtitle_section'):
+            self.subtitle_section.grid_remove()
+        if hasattr(self, 'ai_section'):
+            self.ai_section.grid_remove()
+        
+        # Create a prominent install frame
+        if hasattr(self, 'setup_frame'):
+            self.setup_frame.destroy()
+        
+        self.setup_frame = ttk.Frame(self.left_panel)
+        self.setup_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=20)
+        
+        # Title
+        title_label = ttk.Label(
+            self.setup_frame, 
+            text="⚠️ Setup Required",
+            font=('Segoe UI', 14, 'bold')
+        )
+        title_label.pack(pady=(0, 10))
+        
+        # Description
+        desc_label = ttk.Label(
+            self.setup_frame,
+            text="OpenAI Whisper is required for transcription.\nClick the button below to install it automatically.",
+            justify=tk.CENTER
+        )
+        desc_label.pack(pady=(0, 15))
+        
+        # Big install button
+        self.whisper_install_btn = ttk.Button(
+            self.setup_frame,
+            text="📥  Install Whisper",
+            command=self._install_whisper,
+            style='Accent.TButton'
+        )
+        self.whisper_install_btn.pack(ipadx=20, ipady=10)
+        
+        # Status label
+        self.setup_status_label = ttk.Label(
+            self.setup_frame,
+            text="",
+            foreground='gray'
+        )
+        self.setup_status_label.pack(pady=(10, 0))
+    
+    def _install_whisper(self):
+        """Install Whisper via subprocess"""
+        if hasattr(self, 'whisper_install_btn'):
+            self.whisper_install_btn.config(state='disabled', text='⏳ Installing...')
+        if hasattr(self, 'setup_status_label'):
+            self.setup_status_label.config(text="Installing Whisper... This may take a few minutes.")
+        
+        def install():
+            self.log("\n" + "="*60)
+            self.log("📦 Installing OpenAI Whisper...")
+            self.log("="*60 + "\n")
+            
+            try:
+                # Use --progress-bar off for cleaner output, we'll show our own status
+                process = subprocess.Popen(
+                    ['py', '-m', 'pip', 'install', '--user', '--progress-bar', 'off', 'openai-whisper'],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding='utf-8',
+                    errors='replace',
+                    bufsize=1,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                )
+                
+                current_package = ""
+                for line in process.stdout:
+                    line = line.rstrip()
+                    if not line:
+                        continue
+                    
+                    # Skip some noisy lines
+                    if line.startswith('  ') and 'Uninstalling' not in line and 'Installing' not in line:
+                        continue  # Skip indented detail lines
+                    
+                    self.log(line)
+                    
+                    # Update status with current action
+                    if 'Collecting' in line:
+                        pkg = line.replace('Collecting ', '').split()[0]
+                        current_package = pkg
+                        self.root.after(0, lambda p=pkg: self.setup_status_label.config(text=f"Collecting {p}...") if hasattr(self, 'setup_status_label') else None)
+                    elif 'Downloading' in line:
+                        # Extract size if available
+                        import re
+                        size_match = re.search(r'\(([^)]+)\)', line)
+                        size_info = f" ({size_match.group(1)})" if size_match else ""
+                        self.root.after(0, lambda s=size_info, p=current_package: self.setup_status_label.config(text=f"Downloading {p}{s}...") if hasattr(self, 'setup_status_label') else None)
+                    elif 'Installing collected packages' in line:
+                        self.root.after(0, lambda: self.setup_status_label.config(text="Installing packages...") if hasattr(self, 'setup_status_label') else None)
+                    elif 'Successfully installed' in line:
+                        self.root.after(0, lambda: self.setup_status_label.config(text="Installation complete!") if hasattr(self, 'setup_status_label') else None)
+                
+                process.wait()
+                
+                if process.returncode == 0:
+                    self.log("\n✅ Whisper installed successfully!")
+                    self.root.after(0, self._on_whisper_installed)
+                else:
+                    self.log(f"\n❌ Installation failed (code {process.returncode})")
+                    self.root.after(0, lambda: self._on_install_failed("Whisper"))
+            except Exception as e:
+                self.log(f"\n❌ Error: {e}")
+                self.root.after(0, lambda: self._on_install_failed("Whisper"))
+        
+        threading.Thread(target=install, daemon=True).start()
+    
+    def _on_install_failed(self, package_name):
+        """Handle installation failure"""
+        if hasattr(self, 'whisper_install_btn'):
+            self.whisper_install_btn.config(state='normal', text=f'🔄 Retry Install {package_name}')
+        if hasattr(self, 'setup_status_label'):
+            self.setup_status_label.config(text=f"Installation failed. Check the log for details.")
+    
+    def _on_whisper_installed(self):
+        """Called after Whisper is successfully installed"""
+        # Remove setup frame
+        if hasattr(self, 'setup_frame'):
+            self.setup_frame.destroy()
+            delattr(self, 'setup_frame')
+        
+        # Show all sections again
+        if hasattr(self, 'files_section'):
+            self.files_section.grid()
+            self.files_section.expand()
+        if hasattr(self, 'transcription_section'):
+            self.transcription_section.grid()
+            self.transcription_section.expand()
+        if hasattr(self, 'model_section'):
+            self.model_section.grid()
+        if hasattr(self, 'subtitle_section'):
+            self.subtitle_section.grid()
+        if hasattr(self, 'ai_section'):
+            self.ai_section.grid()
+        
+        # Re-enable start button
+        self.process_btn.config(state='normal')
+        
+        self.log("\n✅ Whisper is ready!")
+        self.log("")
+        
+        # Now check GPU/PyTorch
+        self.check_gpu_availability()
+    
     def check_gpu_availability(self):
         """Check if GPU is available for Whisper"""
         def check():
             gpu_ready = False
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    gpu_name = torch.cuda.get_device_name(0)
-                    self.device_info.set(f"✅ GPU: {gpu_name}")
-                    self.use_gpu.set(True)
-                    self.log(f"GPU detected: {gpu_name}")
-                    gpu_ready = True
+            
+            # For frozen EXE, use subprocess to avoid Python version conflicts
+            if getattr(sys, 'frozen', False):
+                self.log("Checking GPU availability...")
+                try:
+                    result = _run_hidden(
+                        ['py', '-c', '''
+import torch
+if torch.cuda.is_available():
+    print("GPU:" + torch.cuda.get_device_name(0))
+else:
+    print("CPU_ONLY")
+'''],
+                        capture_output=True, text=True, timeout=60
+                    )
                     
-                    # Check if CUDA toolkit is available (for Triton kernels)
-                    try:
-                        # Try to import triton to see if it works
-                        import whisper
-                        # If we can import whisper and we have a GPU, check for toolkit warnings
-                        # We'll show the CUDA button if user reports Triton warnings
-                        self.check_cuda_toolkit_needed()
-                    except:
-                        pass
-                else:
-                    # PyTorch is installed but no CUDA support
-                    self.device_info.set("⚠️ CPU-only PyTorch detected")
+                    output = result.stdout.strip()
+                    
+                    if result.returncode == 0 and output.startswith("GPU:"):
+                        gpu_name = output[4:]  # Remove "GPU:" prefix
+                        self.device_info.set(f"✅ GPU: {gpu_name}")
+                        self.use_gpu.set(True)
+                        self.log(f"✅ GPU detected: {gpu_name}")
+                        gpu_ready = True
+                    elif "CPU_ONLY" in output:
+                        self.device_info.set("⚠️ CPU-only PyTorch")
+                        self.use_gpu.set(False)
+                        self.log("⚠️ PyTorch installed but without CUDA support")
+                        if self.check_nvidia_gpu():
+                            self.root.after(0, self._show_gpu_install_button)
+                    else:
+                        # PyTorch not installed or error
+                        self.device_info.set("⚠️ PyTorch not installed")
+                        self.use_gpu.set(False)
+                        self.log("⚠️ PyTorch not found")
+                        # Show PyTorch install button
+                        self.root.after(0, self._show_pytorch_install_button)
+                except subprocess.TimeoutExpired:
+                    self.device_info.set("⚠️ GPU check timed out")
                     self.use_gpu.set(False)
-                    self.log("⚠️ PyTorch installed but without CUDA support")
+                    self.log("⚠️ GPU check timed out")
+                except Exception as e:
+                    self.device_info.set("⚠️ GPU check failed")
+                    self.use_gpu.set(False)
+                    self.log(f"⚠️ GPU check error: {e}")
+            else:
+                # Running as script - can import directly
+                try:
+                    self.log("Checking GPU availability...")
+                    import torch
                     
-                    # Check if NVIDIA GPU exists
+                    if torch.cuda.is_available():
+                        gpu_name = torch.cuda.get_device_name(0)
+                        self.device_info.set(f"✅ GPU: {gpu_name}")
+                        self.use_gpu.set(True)
+                        self.log(f"✅ GPU detected: {gpu_name}")
+                        gpu_ready = True
+                        
+                        try:
+                            import whisper
+                            self.check_cuda_toolkit_needed()
+                        except:
+                            pass
+                    else:
+                        self.device_info.set("⚠️ CPU-only PyTorch")
+                        self.use_gpu.set(False)
+                        self.log("⚠️ PyTorch installed but without CUDA support")
+                        if self.check_nvidia_gpu():
+                            self.offer_gpu_setup()
+                except ImportError:
+                    self.device_info.set("⚠️ PyTorch not installed")
+                    self.use_gpu.set(False)
+                    self.log("⚠️ PyTorch not found")
                     if self.check_nvidia_gpu():
                         self.offer_gpu_setup()
-            except ImportError:
-                # PyTorch not installed at all
-                self.device_info.set("⚠️ PyTorch not installed")
-                self.use_gpu.set(False)
-                self.log("⚠️ PyTorch not found")
-                
-                # Check if NVIDIA GPU exists
-                if self.check_nvidia_gpu():
-                    self.offer_gpu_setup()
+                except Exception as e:
+                    self.device_info.set("⚠️ GPU check failed")
+                    self.use_gpu.set(False)
+                    self.log(f"⚠️ GPU check error: {e}")
             
-            # Collapse Model section if GPU is ready (everything is set up)
+            # Collapse Model section if GPU is ready
             if gpu_ready and hasattr(self, 'model_section'):
                 self.root.after(100, self.model_section.collapse)
             
@@ -2107,25 +2720,483 @@ RULES:
         # We'll show a hint about CUDA toolkit for max performance
         def delayed_check():
             import time
-            time.sleep(2)  # Give user time to read GPU detection message
+            time.sleep(1)  # Brief pause
             
             # Check if nvcc (CUDA compiler) is available
             try:
-                result = subprocess.run(['nvcc', '--version'], capture_output=True, timeout=5)
-                if result.returncode != 0:
-                    # CUDA toolkit not found
-                    self.show_cuda_toolkit_button()
+                result = subprocess.run(['nvcc', '--version'], capture_output=True, timeout=5,
+                                       creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0)
+                if result.returncode == 0:
+                    # CUDA toolkit already installed
+                    self.log("✅ CUDA Toolkit detected")
+                    return
             except:
-                # CUDA toolkit not found
-                self.show_cuda_toolkit_button()
+                pass
+            
+            # CUDA toolkit not found - show prompt
+            self.root.after(0, self._show_cuda_toolkit_prompt)
         
         threading.Thread(target=delayed_check, daemon=True).start()
     
+    def _show_cuda_toolkit_prompt(self):
+        """Show a prominent prompt for CUDA toolkit installation"""
+        # Create a frame similar to PyTorch install prompt but less intrusive
+        if hasattr(self, 'cuda_frame'):
+            return  # Already showing
+        
+        self.cuda_frame = ttk.Frame(self.left_panel, style='Card.TFrame')
+        self.cuda_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        
+        # Shift other sections down
+        if hasattr(self, 'files_section'):
+            self.files_section.grid(row=1)
+        if hasattr(self, 'transcription_section'):
+            self.transcription_section.grid(row=2)
+        if hasattr(self, 'model_section'):
+            self.model_section.grid(row=3)
+        if hasattr(self, 'subtitle_section'):
+            self.subtitle_section.grid(row=4)
+        if hasattr(self, 'ai_section'):
+            self.ai_section.grid(row=5)
+        
+        # Title
+        title_label = ttk.Label(
+            self.cuda_frame,
+            text="💡 Optional: CUDA Toolkit",
+            font=('Segoe UI', 11, 'bold')
+        )
+        title_label.pack(pady=(10, 5))
+        
+        # Description
+        info_label = ttk.Label(
+            self.cuda_frame,
+            text="Install CUDA Toolkit for ~2x faster transcription (optional, ~3GB download)",
+            wraplength=400
+        )
+        info_label.pack(pady=(0, 10))
+        
+        # Buttons frame
+        btn_frame = ttk.Frame(self.cuda_frame)
+        btn_frame.pack(pady=(0, 10))
+        
+        install_btn = ttk.Button(
+            btn_frame,
+            text="📥 Install CUDA Toolkit",
+            command=self._install_cuda_toolkit
+        )
+        install_btn.pack(side=tk.LEFT, padx=5)
+        
+        skip_btn = ttk.Button(
+            btn_frame,
+            text="Skip (GPU still works)",
+            command=self._dismiss_cuda_toolkit_prompt
+        )
+        skip_btn.pack(side=tk.LEFT, padx=5)
+        
+        self.log("\n💡 Optional: Install CUDA Toolkit for ~2x faster transcription")
+    
+    def _install_cuda_toolkit(self):
+        """Open CUDA Toolkit download page"""
+        import webbrowser
+        
+        # Try to detect CUDA version for better link
+        cuda_version = None
+        try:
+            result = subprocess.run(['nvidia-smi'], capture_output=True, text=True, timeout=5,
+                                   creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0)
+            if result.returncode == 0:
+                import re
+                for line in result.stdout.split('\n'):
+                    if 'CUDA Version' in line:
+                        match = re.search(r'CUDA Version:\s*(\d+\.\d+)', line)
+                        if match:
+                            cuda_version = match.group(1)
+                            break
+        except:
+            pass
+        
+        self.log("\n📥 Opening NVIDIA CUDA Toolkit download page...")
+        
+        if cuda_version:
+            cuda_major = cuda_version.split('.')[0]
+            if cuda_major == "12":
+                url = "https://developer.nvidia.com/cuda-12-1-0-download-archive"
+                self.log(f"Detected CUDA {cuda_version} - opening CUDA 12.1 download page")
+            elif cuda_major == "11":
+                url = "https://developer.nvidia.com/cuda-11-8-0-download-archive"
+                self.log(f"Detected CUDA {cuda_version} - opening CUDA 11.8 download page")
+            else:
+                url = "https://developer.nvidia.com/cuda-downloads"
+                self.log("Opening latest CUDA Toolkit download page")
+        else:
+            url = "https://developer.nvidia.com/cuda-downloads"
+            self.log("Opening CUDA Toolkit download page")
+        
+        webbrowser.open(url)
+        
+        self.log("\nAfter installing CUDA Toolkit:")
+        self.log("1. Restart Final Whisper")
+        self.log("2. Transcription will automatically use CUDA optimizations")
+        
+        # Dismiss the prompt
+        self._dismiss_cuda_toolkit_prompt()
+        
+        messagebox.showinfo(
+            "CUDA Toolkit Installation",
+            "Steps:\n\n"
+            "1. Download the installer from the opened webpage\n"
+            "2. Run the installer (Express Installation recommended)\n"
+            "3. Restart Final Whisper after installation\n\n"
+            "Installation may take 10-15 minutes.\n"
+            "GPU transcription works without this - it's just faster with it!"
+        )
+    
+    def _dismiss_cuda_toolkit_prompt(self):
+        """Dismiss the CUDA toolkit prompt"""
+        if hasattr(self, 'cuda_frame'):
+            self.cuda_frame.destroy()
+            delattr(self, 'cuda_frame')
+        
+        # Restore section positions
+        if hasattr(self, 'files_section'):
+            self.files_section.grid(row=0)
+        if hasattr(self, 'transcription_section'):
+            self.transcription_section.grid(row=1)
+        if hasattr(self, 'model_section'):
+            self.model_section.grid(row=2)
+        if hasattr(self, 'subtitle_section'):
+            self.subtitle_section.grid(row=3)
+        if hasattr(self, 'ai_section'):
+            self.ai_section.grid(row=4)
+    
     def show_cuda_toolkit_button(self):
-        """Show the CUDA toolkit installation button"""
-        self.cuda_btn.grid(row=2, column=0, columnspan=4, pady=(5,0), sticky=(tk.W, tk.E))
-        self.log("\n💡 Tip: Install CUDA Toolkit for maximum GPU performance (optional)")
-        self.log("   Click 'Install CUDA Toolkit' button for ~2x faster transcription")
+        """Show the CUDA toolkit installation button (legacy - now uses prompt)"""
+        # Redirect to new prompt system
+        self._show_cuda_toolkit_prompt()
+    
+    def _show_pytorch_install_button(self):
+        """Show button to install PyTorch at the top of the UI"""
+        # Check if NVIDIA GPU is present
+        has_nvidia = self.check_nvidia_gpu()
+        
+        # Create install frame at the TOP (row 0)
+        if hasattr(self, 'pytorch_frame'):
+            self.pytorch_frame.destroy()
+        
+        self.pytorch_frame = ttk.Frame(self.left_panel)
+        self.pytorch_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 15))
+        
+        # Shift all sections down by changing their row
+        if hasattr(self, 'files_section'):
+            self.files_section.grid(row=1)
+        if hasattr(self, 'transcription_section'):
+            self.transcription_section.grid(row=2)
+        if hasattr(self, 'model_section'):
+            self.model_section.grid(row=3)
+        if hasattr(self, 'subtitle_section'):
+            self.subtitle_section.grid(row=4)
+        if hasattr(self, 'ai_section'):
+            self.ai_section.grid(row=5)
+        
+        if has_nvidia:
+            self.log("\n🎮 NVIDIA GPU detected!")
+            
+            # Title
+            title_label = ttk.Label(
+                self.pytorch_frame,
+                text="⚡ GPU Acceleration Available",
+                font=('Segoe UI', 11, 'bold')
+            )
+            title_label.pack(pady=(0, 5))
+            
+            info_label = ttk.Label(
+                self.pytorch_frame,
+                text="Install PyTorch with CUDA for ~10x faster transcription",
+                wraplength=400
+            )
+            info_label.pack(pady=(0, 10))
+            
+            self.pytorch_install_btn = ttk.Button(
+                self.pytorch_frame,
+                text="⚡ Install PyTorch with GPU Support",
+                command=self._install_pytorch_cuda
+            )
+            self.pytorch_install_btn.pack(ipadx=15, ipady=8)
+            
+            # Skip option
+            skip_btn = ttk.Button(
+                self.pytorch_frame,
+                text="Skip (use CPU instead - slower)",
+                command=self._install_pytorch_cpu
+            )
+            skip_btn.pack(pady=(8, 0))
+        else:
+            self.log("\n💻 No NVIDIA GPU detected - will use CPU mode.")
+            
+            title_label = ttk.Label(
+                self.pytorch_frame,
+                text="📦 PyTorch Required",
+                font=('Segoe UI', 11, 'bold')
+            )
+            title_label.pack(pady=(0, 5))
+            
+            info_label = ttk.Label(
+                self.pytorch_frame,
+                text="PyTorch is required for transcription",
+                wraplength=400
+            )
+            info_label.pack(pady=(0, 10))
+            
+            self.pytorch_install_btn = ttk.Button(
+                self.pytorch_frame,
+                text="📥 Install PyTorch",
+                command=self._install_pytorch_cpu
+            )
+            self.pytorch_install_btn.pack(ipadx=15, ipady=8)
+    
+    def _show_gpu_install_button(self):
+        """Show button to upgrade PyTorch to CUDA version at top of UI"""
+        # Create frame at the TOP (row 0)
+        if hasattr(self, 'pytorch_frame'):
+            self.pytorch_frame.destroy()
+        
+        self.pytorch_frame = ttk.Frame(self.left_panel)
+        self.pytorch_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 15))
+        
+        # Shift all sections down
+        if hasattr(self, 'files_section'):
+            self.files_section.grid(row=1)
+        if hasattr(self, 'transcription_section'):
+            self.transcription_section.grid(row=2)
+        if hasattr(self, 'model_section'):
+            self.model_section.grid(row=3)
+        if hasattr(self, 'subtitle_section'):
+            self.subtitle_section.grid(row=4)
+        if hasattr(self, 'ai_section'):
+            self.ai_section.grid(row=5)
+        
+        # Title
+        title_label = ttk.Label(
+            self.pytorch_frame,
+            text="⚡ GPU Acceleration Available",
+            font=('Segoe UI', 11, 'bold')
+        )
+        title_label.pack(pady=(0, 5))
+        
+        info_label = ttk.Label(
+            self.pytorch_frame,
+            text="Upgrade PyTorch for ~10x faster transcription (optional)",
+            wraplength=400
+        )
+        info_label.pack(pady=(0, 10))
+        
+        self.pytorch_install_btn = ttk.Button(
+            self.pytorch_frame,
+            text="⚡ Upgrade to GPU-accelerated PyTorch",
+            command=self._install_pytorch_cuda
+        )
+        self.pytorch_install_btn.pack(ipadx=15, ipady=8)
+        
+        # Add dismiss button
+        dismiss_btn = ttk.Button(
+            self.pytorch_frame,
+            text="Keep CPU version",
+            command=self._dismiss_pytorch_upgrade
+        )
+        dismiss_btn.pack(pady=(8, 0))
+    
+    def _dismiss_pytorch_upgrade(self):
+        """Dismiss the PyTorch upgrade prompt"""
+        if hasattr(self, 'pytorch_frame'):
+            self.pytorch_frame.destroy()
+            delattr(self, 'pytorch_frame')
+        
+        # Restore section positions to original rows
+        if hasattr(self, 'files_section'):
+            self.files_section.grid(row=0)
+        if hasattr(self, 'transcription_section'):
+            self.transcription_section.grid(row=1)
+        if hasattr(self, 'model_section'):
+            self.model_section.grid(row=2)
+        if hasattr(self, 'subtitle_section'):
+            self.subtitle_section.grid(row=3)
+        if hasattr(self, 'ai_section'):
+            self.ai_section.grid(row=4)
+        
+        self.log("ℹ️ Using CPU mode for transcription.")
+    
+    def _install_pytorch_cpu(self):
+        """Install CPU-only PyTorch"""
+        if hasattr(self, 'pytorch_install_btn'):
+            self.pytorch_install_btn.config(state='disabled', text='⏳ Installing PyTorch...')
+        
+        # Add a status label to the pytorch frame if not exists
+        if hasattr(self, 'pytorch_frame') and not hasattr(self, 'pytorch_status_label'):
+            self.pytorch_status_label = ttk.Label(self.pytorch_frame, text="", foreground='gray')
+            self.pytorch_status_label.pack(pady=(10, 0))
+        
+        def update_status(text):
+            if hasattr(self, 'pytorch_status_label'):
+                self.root.after(0, lambda: self.pytorch_status_label.config(text=text))
+        
+        def install():
+            self.log("\n" + "="*60)
+            self.log("📦 Installing PyTorch (CPU version)...")
+            self.log("="*60 + "\n")
+            
+            update_status("Starting installation...")
+            
+            try:
+                process = subprocess.Popen(
+                    ['py', '-m', 'pip', 'install', '--user', '--progress-bar', 'off', 'torch', 'torchaudio'],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding='utf-8',
+                    errors='replace',
+                    bufsize=1,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                )
+                
+                current_package = ""
+                for line in process.stdout:
+                    line = line.rstrip()
+                    if not line:
+                        continue
+                    if line.startswith('  ') and 'Uninstalling' not in line and 'Installing' not in line:
+                        continue
+                    
+                    self.log(line)
+                    
+                    if 'Collecting' in line:
+                        pkg = line.replace('Collecting ', '').split()[0]
+                        current_package = pkg
+                        update_status(f"Collecting {pkg}...")
+                    elif 'Downloading' in line:
+                        import re
+                        size_match = re.search(r'\(([^)]+)\)', line)
+                        size_info = f" ({size_match.group(1)})" if size_match else ""
+                        update_status(f"Downloading {current_package}{size_info}...")
+                    elif 'Installing collected packages' in line:
+                        update_status("Installing packages...")
+                    elif 'Successfully installed' in line:
+                        update_status("Installation complete!")
+                
+                process.wait()
+                
+                if process.returncode == 0:
+                    self.log("\n✅ PyTorch installed successfully!")
+                    self.root.after(0, self._on_pytorch_installed)
+                else:
+                    self.log(f"\n❌ Installation failed (code {process.returncode})")
+                    self.root.after(0, lambda: self.pytorch_install_btn.config(
+                        state='normal', text='🔄 Retry Install'))
+            except Exception as e:
+                self.log(f"\n❌ Error: {e}")
+                self.root.after(0, lambda: self.pytorch_install_btn.config(
+                    state='normal', text='🔄 Retry Install'))
+        
+        threading.Thread(target=install, daemon=True).start()
+    
+    def _install_pytorch_cuda(self):
+        """Install CUDA-enabled PyTorch"""
+        if hasattr(self, 'pytorch_install_btn'):
+            self.pytorch_install_btn.config(state='disabled', text='⏳ Installing PyTorch with CUDA...')
+        
+        # Add a status label to the pytorch frame if not exists
+        if hasattr(self, 'pytorch_frame') and not hasattr(self, 'pytorch_status_label'):
+            self.pytorch_status_label = ttk.Label(self.pytorch_frame, text="", foreground='gray')
+            self.pytorch_status_label.pack(pady=(10, 0))
+        
+        def update_status(text):
+            if hasattr(self, 'pytorch_status_label'):
+                self.root.after(0, lambda: self.pytorch_status_label.config(text=text))
+        
+        def install():
+            self.log("\n" + "="*60)
+            self.log("📦 Installing PyTorch with CUDA support...")
+            self.log("   This may take several minutes (PyTorch is ~2GB)")
+            self.log("="*60 + "\n")
+            
+            update_status("Starting installation... (this may take a few minutes)")
+            
+            try:
+                # Install PyTorch with CUDA 12.1 support
+                process = subprocess.Popen(
+                    ['py', '-m', 'pip', 'install', '--user', '--progress-bar', 'off', 'torch', 'torchaudio', 
+                     '--index-url', 'https://download.pytorch.org/whl/cu121'],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding='utf-8',
+                    errors='replace',
+                    bufsize=1,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                )
+                
+                current_package = ""
+                for line in process.stdout:
+                    line = line.rstrip()
+                    if not line:
+                        continue
+                    if line.startswith('  ') and 'Uninstalling' not in line and 'Installing' not in line:
+                        continue
+                    
+                    self.log(line)
+                    
+                    if 'Collecting' in line:
+                        pkg = line.replace('Collecting ', '').split()[0]
+                        current_package = pkg
+                        update_status(f"Collecting {pkg}...")
+                    elif 'Downloading' in line:
+                        import re
+                        size_match = re.search(r'\(([^)]+)\)', line)
+                        size_info = f" ({size_match.group(1)})" if size_match else ""
+                        update_status(f"Downloading {current_package}{size_info}...")
+                    elif 'Installing collected packages' in line:
+                        update_status("Installing packages...")
+                    elif 'Successfully installed' in line:
+                        update_status("Installation complete!")
+                
+                process.wait()
+                
+                if process.returncode == 0:
+                    self.log("\n✅ PyTorch with CUDA installed successfully!")
+                    self.root.after(0, self._on_pytorch_installed)
+                else:
+                    self.log(f"\n❌ Installation failed (code {process.returncode})")
+                    self.root.after(0, lambda: self.pytorch_install_btn.config(
+                        state='normal', text='🔄 Retry Install'))
+            except Exception as e:
+                self.log(f"\n❌ Error: {e}")
+                self.root.after(0, lambda: self.pytorch_install_btn.config(
+                    state='normal', text='🔄 Retry Install'))
+        
+        threading.Thread(target=install, daemon=True).start()
+    
+    def _on_pytorch_installed(self):
+        """Called after PyTorch is successfully installed"""
+        # Remove install frame
+        if hasattr(self, 'pytorch_frame'):
+            self.pytorch_frame.destroy()
+            delattr(self, 'pytorch_frame')
+        
+        # Restore section positions to original rows
+        if hasattr(self, 'files_section'):
+            self.files_section.grid(row=0)
+        if hasattr(self, 'transcription_section'):
+            self.transcription_section.grid(row=1)
+        if hasattr(self, 'model_section'):
+            self.model_section.grid(row=2)
+        if hasattr(self, 'subtitle_section'):
+            self.subtitle_section.grid(row=3)
+        if hasattr(self, 'ai_section'):
+            self.ai_section.grid(row=4)
+        
+        self.log("")
+        
+        # Re-check GPU availability to update status
+        self.check_gpu_availability()
     
     def check_nvidia_gpu(self):
         """Check if NVIDIA GPU is present using nvidia-smi"""
@@ -2473,185 +3544,6 @@ RULES:
             messagebox.showwarning("No NVIDIA GPU",
                 "No NVIDIA GPU detected on this system.\n\n"
                 "GPU acceleration requires an NVIDIA graphics card with CUDA support.")
-    
-    def offer_cuda_toolkit(self):
-        """Offer to help install CUDA Toolkit"""
-        response = messagebox.askyesnocancel(
-            "Install CUDA Toolkit",
-            "CUDA Toolkit provides additional GPU optimizations for ~2x faster transcription.\n\n"
-            "Note: This is a large download (~3GB) from NVIDIA.\n\n"
-            "Would you like to:\n"
-            "• YES - Open NVIDIA download page (you install manually)\n"
-            "• NO - Continue without CUDA Toolkit (GPU still works)\n"
-            "• CANCEL - Do nothing",
-            icon='question'
-        )
-        
-        if response is True:
-            # Open NVIDIA download page
-            import webbrowser
-            
-            # Try to detect CUDA version for better link
-            cuda_version = None
-            try:
-                result = subprocess.run(['nvidia-smi'], capture_output=True, text=True, timeout=5)
-                if result.returncode == 0:
-                    import re
-                    for line in result.stdout.split('\n'):
-                        if 'CUDA Version' in line:
-                            match = re.search(r'CUDA Version:\s*(\d+\.\d+)', line)
-                            if match:
-                                cuda_version = match.group(1)
-                                break
-            except:
-                pass
-            
-            self.log("\n📥 Opening NVIDIA CUDA Toolkit download page...")
-            self.log("Please download and install the toolkit, then click 'Add CUDA to PATH' button below.")
-            
-            if cuda_version:
-                cuda_major = cuda_version.split('.')[0]
-                if cuda_major == "12":
-                    url = "https://developer.nvidia.com/cuda-12-1-0-download-archive"
-                    self.log(f"Detected CUDA {cuda_version} - opening CUDA 12.1 download page")
-                elif cuda_major == "11":
-                    url = "https://developer.nvidia.com/cuda-11-8-0-download-archive"
-                    self.log(f"Detected CUDA {cuda_version} - opening CUDA 11.8 download page")
-                else:
-                    url = "https://developer.nvidia.com/cuda-downloads"
-                    self.log("Opening latest CUDA Toolkit download page")
-            else:
-                url = "https://developer.nvidia.com/cuda-downloads"
-                self.log("Opening CUDA Toolkit download page")
-            
-            webbrowser.open(url)
-            
-            # Replace the button with "Add CUDA to PATH" button
-            self.cuda_btn.config(text="Add CUDA to PATH", command=self.add_cuda_to_path)
-            
-            messagebox.showinfo(
-                "CUDA Toolkit Installation",
-                "Steps:\n\n"
-                "1. Download the installer from the opened webpage\n"
-                "2. Run the installer (Express Installation recommended)\n"
-                "3. After installation completes, click 'Add CUDA to PATH' button\n\n"
-                "Installation may take 10-15 minutes."
-            )
-        elif response is False:
-            self.log("\nℹ️ Continuing without CUDA Toolkit - GPU will still be used")
-            self.cuda_btn.grid_remove()  # Hide the button
-        # If None (cancelled), do nothing
-    
-    def add_cuda_to_path(self):
-        """Find CUDA installation and add to PATH"""
-        self.log("\n🔍 Searching for CUDA Toolkit installation...")
-        
-        def find_and_add():
-            try:
-                import winreg
-                import os
-                
-                # Common CUDA installation path
-                cuda_base = r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA"
-                
-                if not os.path.exists(cuda_base):
-                    self.log("❌ CUDA Toolkit not found in default location")
-                    self.log(f"   Expected: {cuda_base}")
-                    messagebox.showerror("CUDA Not Found", 
-                        "CUDA Toolkit not found in the default installation location.\n\n"
-                        "Please ensure CUDA Toolkit is installed first.")
-                    return
-                
-                # Find installed CUDA versions
-                cuda_versions = []
-                for item in os.listdir(cuda_base):
-                    version_path = os.path.join(cuda_base, item)
-                    bin_path = os.path.join(version_path, "bin")
-                    if os.path.isdir(version_path) and os.path.exists(bin_path):
-                        cuda_versions.append((item, bin_path))
-                
-                if not cuda_versions:
-                    self.log("❌ No valid CUDA installations found")
-                    messagebox.showerror("CUDA Not Found", 
-                        "CUDA Toolkit folder exists but no valid versions found.\n\n"
-                        "Please reinstall CUDA Toolkit.")
-                    return
-                
-                # Use the latest version
-                cuda_versions.sort(reverse=True)
-                version, bin_path = cuda_versions[0]
-                
-                self.log(f"✅ Found CUDA {version}")
-                self.log(f"   Path: {bin_path}")
-                
-                # Check if already in PATH
-                current_path = os.environ.get('PATH', '')
-                if bin_path.lower() in current_path.lower():
-                    self.log("ℹ️ CUDA is already in PATH")
-                    self.log("Restarting application to detect CUDA...")
-                    messagebox.showinfo("Already in PATH", 
-                        "CUDA is already in your PATH.\n\n"
-                        "Please restart this application to detect it.")
-                    self.cuda_btn.grid_remove()
-                    return
-                
-                # Add to user PATH (no admin required)
-                self.log("Adding CUDA to user PATH...")
-                
-                try:
-                    # Read current user PATH
-                    key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment', 0, winreg.KEY_READ | winreg.KEY_WRITE)
-                    try:
-                        current_user_path, _ = winreg.QueryValueEx(key, 'PATH')
-                    except WindowsError:
-                        current_user_path = ''
-                    
-                    # Add CUDA if not already there
-                    if bin_path.lower() not in current_user_path.lower():
-                        new_path = current_user_path.rstrip(';') + ';' + bin_path
-                        winreg.SetValueEx(key, 'PATH', 0, winreg.REG_EXPAND_SZ, new_path)
-                        self.log("✅ CUDA added to user PATH successfully!")
-                    
-                    winreg.CloseKey(key)
-                    
-                    # Broadcast environment change
-                    import ctypes
-                    HWND_BROADCAST = 0xFFFF
-                    WM_SETTINGCHANGE = 0x001A
-                    SMTO_ABORTIFHUNG = 0x0002
-                    result = ctypes.c_long()
-                    ctypes.windll.user32.SendMessageTimeoutW(
-                        HWND_BROADCAST, WM_SETTINGCHANGE, 0, "Environment",
-                        SMTO_ABORTIFHUNG, 5000, ctypes.byref(result)
-                    )
-                    
-                    self.log("\n✅ PATH updated successfully!")
-                    self.log("Please restart this application for changes to take effect.")
-                    
-                    self.cuda_btn.grid_remove()  # Hide the button
-                    
-                    messagebox.showinfo("Success", 
-                        f"CUDA {version} has been added to your PATH!\n\n"
-                        "Please restart this application to use CUDA acceleration.")
-                    
-                except Exception as e:
-                    self.log(f"❌ Failed to update PATH: {str(e)}")
-                    self.log("\nManual steps:")
-                    self.log(f'1. Press Win+R, type "sysdm.cpl" and press Enter')
-                    self.log('2. Go to Advanced tab -> Environment Variables')
-                    self.log('3. Under User variables, edit PATH')
-                    self.log(f'4. Add: {bin_path}')
-                    
-                    messagebox.showerror("Failed to Update PATH",
-                        f"Could not automatically update PATH.\n\n"
-                        f"Please add manually:\n{bin_path}\n\n"
-                        "See log for instructions.")
-                
-            except Exception as e:
-                self.log(f"❌ Error: {str(e)}")
-                messagebox.showerror("Error", f"An error occurred:\n{str(e)}")
-        
-        threading.Thread(target=find_and_add, daemon=True).start()
         
     def browse_video(self):
         """Browse for video file"""
@@ -2719,6 +3611,13 @@ RULES:
             self.stop_btn.config(state='disabled')
             self.progress_label.config(text="Stopping...")
             self.log("\n⚠️ Stop requested - cancelling transcription...")
+            
+            # Also terminate the subprocess if it's running
+            if self.transcription_process is not None:
+                try:
+                    self.transcription_process.terminate()
+                except:
+                    pass
     
     def update_timer(self):
         """Update the progress label with elapsed time every second"""
@@ -2736,7 +3635,7 @@ RULES:
             self.root.after(1000, self.update_timer)
     
     def _update_progress_label(self):
-        """Update progress label with current stats"""
+        """Update progress label with current stats - only updates elapsed time"""
         import time
         
         if not self.transcription_start_time:
@@ -2744,8 +3643,14 @@ RULES:
         
         # Don't overwrite the "Done" message
         current_text = self.progress_label.cget('text')
-        if '✓ Done' in current_text:
+        if '✓ Done' in current_text or 'Cancelled' in current_text:
             self.timer_running = False
+            return
+        
+        # Don't update if detailed progress was recently set (within last 2 seconds)
+        # This allows the transcription progress updates to control the display
+        last_detail_update = getattr(self, '_last_detail_progress_time', 0)
+        if time.time() - last_detail_update < 2.0:
             return
         
         time_elapsed = time.time() - self.transcription_start_time
@@ -2754,7 +3659,6 @@ RULES:
         
         # Check if we're in proofreading mode
         if getattr(self, '_proofreading_mode', False):
-            # During proofreading, show status with batch info if available
             batch_info = getattr(self, '_proofreading_batch_info', None)
             if batch_info:
                 self.progress_label.config(text=f"AI Proofreading... {batch_info} | Elapsed: {elapsed_min}:{elapsed_sec:02d}")
@@ -2762,43 +3666,26 @@ RULES:
                 self.progress_label.config(text=f"AI Proofreading... | Elapsed: {elapsed_min}:{elapsed_sec:02d}")
             return
         
-        # Check if we have detailed progress info
-        audio_pos = getattr(self, 'last_audio_position', None)
-        audio_dur = getattr(self, 'last_audio_duration', None)
-        progress_val = getattr(self, 'last_progress_value', None)
+        # If we have ETA/Speed info, update the whole string with new elapsed time
+        if ' | ETA:' in current_text and ' | Speed:' in current_text:
+            # Parse and rebuild the detailed progress string
+            try:
+                import re
+                # Extract parts: "Transcribing... X% (Ys / Zs) | Elapsed: ... | ETA: ... | Speed: ..."
+                match = re.match(r'(.*?\(\d+s / \d+s\)).*ETA: (\d+:\d+).*Speed: ([\d.]+x)', current_text)
+                if match:
+                    base = match.group(1)
+                    eta = match.group(2)
+                    speed = match.group(3)
+                    self.progress_label.config(text=f"{base} | Elapsed: {elapsed_min}:{elapsed_sec:02d} | ETA: {eta} | Speed: {speed}")
+                    return
+            except:
+                pass
         
-        if audio_pos and audio_dur and audio_pos > 0:
-            # Calculate speed and ETA
-            processing_speed = audio_pos / time_elapsed if time_elapsed > 0 else 0
-            remaining_audio = audio_dur - audio_pos
-            eta_seconds = remaining_audio / processing_speed if processing_speed > 0 else 0
-            
-            # Format ETA
-            eta_min = int(eta_seconds // 60)
-            eta_sec = int(eta_seconds % 60)
-            
-            # Calculate percentage
-            percent = int((audio_pos / audio_dur) * 100) if audio_dur > 0 else 0
-            
-            # Format: Transcribing... 15% (47s / 910s) | Elapsed: 2:21 | ETA: 27:52 | Speed: 1.0x
-            progress_text = (f"Transcribing... {percent}% ({audio_pos:.0f}s / {audio_dur:.0f}s) | "
-                           f"Elapsed: {elapsed_min}:{elapsed_sec:02d} | "
-                           f"ETA: {eta_min}:{eta_sec:02d} | "
-                           f"Speed: {processing_speed:.1f}x")
-            self.progress_label.config(text=progress_text)
-        elif progress_val is not None:
-            # Just show percentage and elapsed
-            self.progress_label.config(text=f"Transcribing... {progress_val:.0f}% | Elapsed: {elapsed_min}:{elapsed_sec:02d}")
-        else:
-            # Just show elapsed time
-            current_text = self.progress_label.cget('text')
-            if ' | Elapsed:' in current_text:
-                base_text = current_text.split(' | Elapsed:')[0]
-            else:
-                base_text = current_text if current_text else "Transcribing..."
-            
-            if base_text:
-                self.progress_label.config(text=f"{base_text} | Elapsed: {elapsed_min}:{elapsed_sec:02d}")
+        # Simple format - just update elapsed time
+        if ' | Elapsed:' in current_text:
+            base_text = current_text.split(' | Elapsed:')[0]
+            self.progress_label.config(text=f"{base_text} | Elapsed: {elapsed_min}:{elapsed_sec:02d}")
     
     def update_progress_with_time(self, value, status_text):
         """Update progress bar and label with elapsed time"""
@@ -2815,6 +3702,499 @@ RULES:
         
     def run_transcription(self):
         """Run the actual transcription"""
+        try:
+            # For frozen EXE, run whisper via subprocess to avoid Python version conflicts
+            if getattr(sys, 'frozen', False):
+                self._run_transcription_subprocess()
+            else:
+                self._run_transcription_direct()
+        finally:
+            # Always reset buttons when done (for subprocess mode)
+            # Direct mode has its own finally block
+            if getattr(sys, 'frozen', False):
+                self.root.after(0, self._reset_ui_after_transcription)
+    
+    def _reset_ui_after_transcription(self):
+        """Reset UI elements after transcription completes"""
+        was_stopped = self.stop_requested
+        
+        self.processing = False
+        self.stop_requested = False
+        self.timer_running = False
+        self._proofreading_mode = False
+        self.progress.stop_animation()
+        self.process_btn.config(state='normal')
+        self.stop_btn.config(state='disabled')
+        
+        if was_stopped:
+            # User cancelled - reset progress
+            self.progress['value'] = 0
+            self.progress_label.config(text="Cancelled")
+            self.log("❌ Transcription cancelled")
+        elif self.progress['value'] < 100:
+            # Didn't complete successfully - reset
+            self.progress['value'] = 0
+            self.progress_label.config(text="")
+    
+    def _run_transcription_subprocess(self):
+        """Run transcription via subprocess (for frozen EXE)"""
+        video_file = self.video_path.get()
+        output_dir = self.output_dir.get()
+        
+        if self.stop_requested:
+            self.log("❌ Transcription cancelled before starting")
+            return
+        
+        self.log(f"\n{'='*60}")
+        self.log(f"Starting transcription of: {os.path.basename(video_file)}")
+        self.log(f"Model: {self.model.get()}")
+        self.log(f"Language: {self.language.get()}")
+        device = "cuda" if self.use_gpu.get() else "cpu"
+        self.log(f"Device: {'GPU' if device == 'cuda' else 'CPU'}")
+        self.log(f"{'='*60}\n")
+        
+        # Get audio duration for progress tracking
+        audio_duration = None
+        try:
+            # Hide console window for ffprobe
+            startupinfo = None
+            creationflags = 0
+            if os.name == 'nt':
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = subprocess.SW_HIDE
+                creationflags = subprocess.CREATE_NO_WINDOW
+            
+            result = subprocess.run(
+                ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+                 '-of', 'default=noprint_wrappers=1:nokey=1', video_file],
+                capture_output=True, text=True, timeout=10,
+                startupinfo=startupinfo,
+                creationflags=creationflags
+            )
+            if result.returncode == 0:
+                audio_duration = float(result.stdout.strip())
+                self.log(f"Audio duration: {audio_duration:.1f} seconds\n")
+                self.last_audio_duration = audio_duration
+        except:
+            pass
+        
+        video_name = Path(video_file).stem
+        srt_file = Path(output_dir) / f"{video_name}.srt"
+        json_file = Path(output_dir) / f"{video_name}_temp.json"
+        
+        # Create the transcription helper script inline
+        helper_script = '''
+import sys, json, argparse, os
+
+# Force unbuffered output
+sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', buffering=1)
+sys.stderr = os.fdopen(sys.stderr.fileno(), 'w', buffering=1)
+
+# Fix Windows encoding issues
+if sys.platform == 'win32':
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    os.environ['PYTHONIOENCODING'] = 'utf-8'
+
+parser = argparse.ArgumentParser()
+parser.add_argument('video_file')
+parser.add_argument('--model', default='turbo')
+parser.add_argument('--language', default='da')
+parser.add_argument('--device', default='cpu')
+parser.add_argument('--output', required=True)
+parser.add_argument('--initial_prompt', default='')
+parser.add_argument('--word_timestamps', type=lambda x: x.lower() == 'true', default=True)
+parser.add_argument('--condition_on_previous_text', type=lambda x: x.lower() == 'true', default=True)
+parser.add_argument('--no_speech_threshold', type=float, default=0.6)
+parser.add_argument('--hallucination_silence_threshold', type=float, default=0.0)
+args = parser.parse_args()
+
+import whisper
+
+# Verify the file exists and print its path
+video_path = os.path.abspath(args.video_file)
+print(f"Input file: {video_path}", flush=True)
+if not os.path.exists(video_path):
+    print(f"ERROR: File not found: {video_path}", flush=True)
+    sys.exit(1)
+print(f"File size: {os.path.getsize(video_path)} bytes", flush=True)
+
+# Check if model needs to be downloaded
+model_name = args.model
+whisper_cache = os.path.join(os.path.expanduser("~"), ".cache", "whisper")
+
+# For "large" and "turbo", find the latest version available
+def find_model_file(name, cache_dir):
+    """Find the actual model file, checking for latest versions"""
+    if not os.path.exists(cache_dir):
+        return None
+    
+    cache_files = os.listdir(cache_dir)
+    
+    if name == "large":
+        # Look for large-v* files, pick highest version
+        large_files = [f for f in cache_files if f.startswith("large-v") and f.endswith(".pt") and "turbo" not in f]
+        if large_files:
+            large_files.sort(reverse=True)  # large-v3.pt > large-v2.pt > large-v1.pt
+            return os.path.join(cache_dir, large_files[0])
+    elif name == "turbo":
+        # Look for turbo files, pick latest
+        turbo_files = [f for f in cache_files if "turbo" in f and f.endswith(".pt")]
+        if turbo_files:
+            turbo_files.sort(reverse=True)
+            return os.path.join(cache_dir, turbo_files[0])
+    else:
+        # Direct match for specific versions
+        direct_file = os.path.join(cache_dir, f"{name}.pt")
+        if os.path.exists(direct_file):
+            return direct_file
+        # Also check for files containing the name
+        for f in cache_files:
+            if name in f and f.endswith(".pt"):
+                return os.path.join(cache_dir, f)
+    
+    return None
+
+model_file = find_model_file(model_name, whisper_cache)
+model_exists = model_file is not None and os.path.exists(model_file)
+
+if not model_exists:
+    print(f"Downloading model {model_name}... (this is a one-time download)", flush=True)
+
+print(f"Loading model {model_name}...", flush=True)
+model = whisper.load_model(args.model, device=args.device)
+print("Model loaded", flush=True)
+
+# Build transcription options
+opts = {'language': args.language, 'word_timestamps': args.word_timestamps, 'verbose': True,
+        'condition_on_previous_text': args.condition_on_previous_text,
+        'no_speech_threshold': args.no_speech_threshold}
+if args.initial_prompt:
+    opts['initial_prompt'] = args.initial_prompt
+if args.hallucination_silence_threshold > 0:
+    opts['hallucination_silence_threshold'] = args.hallucination_silence_threshold
+
+print("Transcribing...", flush=True)
+print(f"Options: condition_on_previous_text={args.condition_on_previous_text}, no_speech_threshold={args.no_speech_threshold}", flush=True)
+
+# Use file path directly - let Whisper handle audio loading
+result = model.transcribe(video_path, **opts)
+print("Transcription complete", flush=True)
+
+# Debug: print first few segments
+if result.get('segments'):
+    first_seg = result['segments'][0]
+    print(f"First segment: {first_seg.get('start', 'N/A')}s - {first_seg.get('end', 'N/A')}s: {first_seg.get('text', '')[:50]}", flush=True)
+    print(f"Total segments: {len(result['segments'])}", flush=True)
+else:
+    print("WARNING: No segments in result!", flush=True)
+
+output = {'text': result.get('text', ''), 'language': result.get('language', ''), 'segments': []}
+for seg in result.get('segments', []):
+    s = {'id': seg.get('id', 0), 'start': seg.get('start', 0), 'end': seg.get('end', 0), 'text': seg.get('text', ''), 'words': []}
+    for w in seg.get('words', []):
+        s['words'].append({'word': w.get('word', ''), 'start': w.get('start', 0), 'end': w.get('end', 0)})
+    output['segments'].append(s)
+
+with open(args.output, 'w', encoding='utf-8') as f:
+    json.dump(output, f, ensure_ascii=False)
+print("DONE", flush=True)
+'''
+        
+        # Build command to run helper script
+        # Use -u for unbuffered output so we get line-by-line progress
+        cmd = [
+            'py', '-u', '-c', helper_script,
+            video_file,
+            '--model', self.model.get(),
+            '--language', self.get_language_code(),
+            '--device', device,
+            '--output', str(json_file),
+            '--word_timestamps', 'true' if self.use_word_timestamps.get() else 'false',
+            '--condition_on_previous_text', 'true' if self.condition_on_previous_text.get() else 'false',
+            '--no_speech_threshold', str(self.no_speech_threshold.get()),
+            '--hallucination_silence_threshold', str(self.hallucination_silence_threshold.get()),
+        ]
+        
+        # Add context/prompt if provided
+        context = self.context_prompt.get().strip()
+        if context:
+            cmd.extend(['--initial_prompt', context])
+            self.log(f"Using context: {context[:100]}{'...' if len(context) > 100 else ''}\n")
+        
+        # Log anti-hallucination settings if non-default
+        if not self.condition_on_previous_text.get():
+            self.log("Anti-hallucination: condition_on_previous_text = OFF")
+        if self.no_speech_threshold.get() != 0.6:
+            self.log(f"Anti-hallucination: no_speech_threshold = {self.no_speech_threshold.get()}")
+        if self.hallucination_silence_threshold.get() > 0:
+            self.log(f"Anti-hallucination: silence_threshold = {self.hallucination_silence_threshold.get()}s")
+        
+        self.update_progress_with_time(10, "Starting transcription...")
+        
+        try:
+            # Set up environment with UTF-8 encoding
+            env = os.environ.copy()
+            env['PYTHONIOENCODING'] = 'utf-8'
+            
+            # Hide console window on Windows
+            startupinfo = None
+            creationflags = 0
+            if os.name == 'nt':
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = subprocess.SW_HIDE
+                creationflags = subprocess.CREATE_NO_WINDOW
+            
+            # Run transcription helper and capture output
+            self.transcription_process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                bufsize=1,
+                env=env,
+                startupinfo=startupinfo,
+                creationflags=creationflags
+            )
+            
+            # Read output line by line
+            for line in self.transcription_process.stdout:
+                if self.stop_requested:
+                    self.transcription_process.terminate()
+                    self.log("\n❌ Transcription cancelled by user")
+                    return
+                
+                line = line.strip()
+                if not line:
+                    continue
+                
+                import re  # Import at top of loop for all uses
+                    
+                # Filter out warnings
+                if any(skip in line for skip in ['UserWarning', 'FutureWarning', 'Triton', 'warnings.warn']):
+                    continue
+                if line.startswith('C:\\') and 'site-packages' in line:
+                    continue
+                
+                # Update progress based on status
+                if 'Loading model' in line:
+                    self.update_progress_with_time(15, "Loading model...")
+                    self.log(f"📥 {line}")
+                elif 'Downloading' in line or 'download' in line.lower():
+                    # Model download in progress
+                    self.update_progress_with_time(10, "Downloading model...")
+                    self.log(f"📥 {line}")
+                elif '%|' in line or 'B/s' in line or 'MB' in line:
+                    # tqdm progress bar output - show download progress
+                    # Extract percentage if present
+                    pct_match = re.search(r'(\d+)%', line)
+                    if pct_match:
+                        pct = int(pct_match.group(1))
+                        self.update_progress_with_time(5 + (pct * 0.15), f"Downloading model... {pct}%")
+                    # Don't log every progress line to avoid spam, just update status
+                elif 'Model loaded' in line:
+                    self.update_progress_with_time(25, "Model loaded")
+                    self.log(f"✅ {line}")
+                elif 'Transcribing' in line and 'Options' not in line:
+                    self.update_progress_with_time(30, "Transcribing...")
+                    self.log(f"🎤 {line}")
+                elif 'Transcription complete' in line:
+                    self.update_progress_with_time(80, "Processing...")
+                    self.log(f"✅ {line}")
+                elif '-->' in line and '[' in line:
+                    # Timestamp line like: [00:08.580 --> 00:11.460]  Text here
+                    self.log(line)
+                    try:
+                        # Parse timestamp - format is [MM:SS.mmm --> MM:SS.mmm]
+                        match = re.search(r'\[(\d+):(\d+)\.(\d+)\s*-->', line)
+                        if match:
+                            minutes = int(match.group(1))
+                            seconds = int(match.group(2))
+                            current_time = minutes * 60 + seconds
+                            
+                            # Update audio position for ETA calculation
+                            self.last_audio_position = current_time
+                            
+                            # Calculate progress based on audio duration if available
+                            if audio_duration and audio_duration > 0:
+                                progress = 30 + (current_time / audio_duration) * 55
+                                progress = min(85, progress)
+                                
+                                # Calculate ETA
+                                import time
+                                time_elapsed = time.time() - self.transcription_start_time
+                                elapsed_min = int(time_elapsed // 60)
+                                elapsed_sec = int(time_elapsed % 60)
+                                
+                                processing_speed = current_time / time_elapsed if time_elapsed > 0 else 0
+                                remaining_audio = audio_duration - current_time
+                                eta_seconds = remaining_audio / processing_speed if processing_speed > 0 else 0
+                                eta_min = int(eta_seconds // 60)
+                                eta_sec = int(eta_seconds % 60)
+                                percent = int((current_time / audio_duration) * 100)
+                                
+                                # Update progress bar and label (use root.after for thread safety)
+                                progress_text = (f"Transcribing... {percent}% ({current_time:.0f}s / {audio_duration:.0f}s) | "
+                                               f"Elapsed: {elapsed_min}:{elapsed_sec:02d} | "
+                                               f"ETA: {eta_min}:{eta_sec:02d} | "
+                                               f"Speed: {processing_speed:.1f}x")
+                                
+                                def update_ui(p=progress, t=progress_text):
+                                    self.progress['value'] = p
+                                    self.progress_label.config(text=t)
+                                self.root.after(0, update_ui)
+                                
+                                # Set timestamp so timer doesn't overwrite
+                                self._last_detail_progress_time = time.time()
+                                self.last_progress_value = progress
+                            else:
+                                # No duration info - just show basic progress
+                                progress = min(75, 30 + minutes * 3)
+                                self.root.after(0, lambda p=progress: self.progress.configure(value=p))
+                                self.last_progress_value = progress
+                    except Exception as e:
+                        pass  # Don't let parsing errors stop transcription
+                elif 'DONE' in line:
+                    pass  # Skip final marker
+                elif 'Error' in line or 'Traceback' in line or 'Exception' in line:
+                    self.log(f"⚠️ {line}")
+                else:
+                    self.log(line)
+            
+            self.transcription_process.wait()
+            
+            # Check if stopped by user
+            if self.stop_requested:
+                return  # Exit cleanly - UI reset handled by finally block
+            
+            # Check if JSON was created (success indicator)
+            if json_file.exists():
+                # Success - JSON was created regardless of return code
+                pass
+            elif self.transcription_process.returncode != 0:
+                self.log(f"\n❌ Transcription failed with code {self.transcription_process.returncode}")
+                return
+            
+        except Exception as e:
+            if not self.stop_requested:  # Don't log error if user cancelled
+                self.log(f"\n❌ Error: {e}")
+                import traceback
+                self.log(traceback.format_exc())
+            return
+        finally:
+            self.transcription_process = None
+        
+        # Check if JSON was created
+        if not json_file.exists():
+            self.log(f"⚠️ Transcription output not found at {json_file}")
+            return
+        
+        self.update_progress_with_time(85, "Generating subtitles...")
+        
+        # Load the JSON result
+        try:
+            import json
+            with open(json_file, 'r', encoding='utf-8') as f:
+                result = json.load(f)
+            
+            # Clean up temp JSON file
+            json_file.unlink()
+            
+        except Exception as e:
+            self.log(f"❌ Error reading transcription result: {e}")
+            return
+        
+        # Check if we have word-level timestamps
+        has_word_timestamps = (
+            self.use_word_timestamps.get() and 
+            result.get('segments') and 
+            len(result['segments']) > 0 and
+            result['segments'][0].get('words') and
+            len(result['segments'][0]['words']) > 0
+        )
+        
+        if has_word_timestamps:
+            # Use our smart SRT generator with word-level timestamps
+            self.log("📝 Using word-level timestamps for smart subtitle splitting...")
+            generate_smart_srt(
+                result, 
+                srt_file,
+                max_chars_per_line=self.max_chars_per_line.get(),
+                max_lines=self.max_line_count.get()
+            )
+            self.log("✅ Smart SRT generation complete!")
+        else:
+            # Generate basic SRT from segments
+            self.log("📝 Generating SRT from segments...")
+            with open(srt_file, 'w', encoding='utf-8') as f:
+                for i, seg in enumerate(result.get('segments', []), 1):
+                    start = self._format_srt_time(seg['start'])
+                    end = self._format_srt_time(seg['end'])
+                    text = seg.get('text', '').strip()
+                    f.write(f"{i}\n{start} --> {end}\n{text}\n\n")
+            self.log("✅ SRT generation complete!")
+        
+        # AI Proofreading
+        proofread_file = None
+        if self.use_ai_proofreading.get():
+            self._proofreading_mode = True
+            self._proofreading_batch_info = None
+            try:
+                # For frozen EXE, run proofreading via subprocess to get proper SSL support
+                if getattr(sys, 'frozen', False):
+                    proofread_file = self._proofread_via_subprocess(
+                        srt_file=str(srt_file),
+                        language=self.get_language_code(),
+                        context=self.context_prompt.get().strip()
+                    )
+                else:
+                    proofread_file = self.proofread_srt_with_ai(
+                        srt_file=str(srt_file),
+                        language=self.get_language_code(),
+                        context=self.context_prompt.get().strip()
+                    )
+            except Exception as e:
+                self.log(f"❌ AI Proofreading error: {e}")
+                import traceback
+                self.log(traceback.format_exc())
+            finally:
+                self._proofreading_mode = False
+        
+        # Done!
+        self.progress['value'] = 100
+        self.progress.stop_animation()  # Stop gradient animation
+        self.timer_running = False  # Stop timer
+        
+        if self.transcription_start_time:
+            import time
+            total_time = time.time() - self.transcription_start_time
+            minutes = int(total_time // 60)
+            seconds = int(total_time % 60)
+            self.progress_label.config(text=f"✓ Done in {minutes}:{seconds:02d}")
+        else:
+            self.progress_label.config(text="✓ Done")
+        
+        self.log(f"\n📁 Output saved to: {output_dir}")
+        if proofread_file:
+            self.log(f"   {srt_file.name} (proofread)")
+        else:
+            self.log(f"   {srt_file.name}")
+        
+        self.play_completion_chime()
+    
+    def _format_srt_time(self, seconds):
+        """Format seconds to SRT timestamp"""
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        secs = seconds % 60
+        return f"{hours:02d}:{minutes:02d}:{secs:06.3f}".replace('.', ',')
+    
+    def _run_transcription_direct(self):
+        """Run transcription directly (for running as script)"""
         try:
             import whisper
             
@@ -2916,14 +4296,28 @@ RULES:
             transcribe_options = {
                 'language': self.get_language_code(),
                 'word_timestamps': self.use_word_timestamps.get(),
-                'verbose': True  # Keep verbose for progress
+                'verbose': True,  # Keep verbose for progress
+                'condition_on_previous_text': self.condition_on_previous_text.get(),
+                'no_speech_threshold': self.no_speech_threshold.get(),
             }
+            
+            # Add hallucination silence threshold if set
+            if self.hallucination_silence_threshold.get() > 0:
+                transcribe_options['hallucination_silence_threshold'] = self.hallucination_silence_threshold.get()
             
             # Add context/prompt if provided
             context = self.context_prompt.get().strip()
             if context:
                 transcribe_options['initial_prompt'] = context
                 self.log(f"Using context: {context[:100]}{'...' if len(context) > 100 else ''}\n")
+            
+            # Log anti-hallucination settings if non-default
+            if not self.condition_on_previous_text.get():
+                self.log("Anti-hallucination: condition_on_previous_text = OFF")
+            if self.no_speech_threshold.get() != 0.6:
+                self.log(f"Anti-hallucination: no_speech_threshold = {self.no_speech_threshold.get()}")
+            if self.hallucination_silence_threshold.get() > 0:
+                self.log(f"Anti-hallucination: silence_threshold = {self.hallucination_silence_threshold.get()}s")
             
             # Track progress (transcription_start_time already set in start_transcription)
             self.last_progress_update = 0
@@ -3138,6 +4532,9 @@ RULES:
             self.log(traceback.format_exc())
             messagebox.showerror("Error", f"An error occurred:\n{str(e)}")
         finally:
+            # Save stop_requested state before resetting
+            was_stopped = self.stop_requested
+            
             self.processing = False
             self.stop_requested = False
             self.timer_running = False
@@ -3145,7 +4542,7 @@ RULES:
             self.progress.stop_animation()  # Stop gradient animation
             self.process_btn.config(state='normal')
             self.stop_btn.config(state='disabled')
-            if not self.stop_requested:
+            if not was_stopped:
                 # Keep progress at 100% if completed, otherwise reset
                 if self.progress['value'] < 100:
                     self.progress['value'] = 0
@@ -3160,10 +4557,27 @@ RULES:
                         current_text = self.progress_label.cget('text')
                         if 'Done' in current_text or 'Complete' in current_text:
                             self.progress_label.config(text=f"✓ Done in {minutes}:{seconds:02d}")
+    
+    def on_closing(self):
+        """Handle window close - save settings"""
+        self.save_settings()
+        self.root.destroy()
 
 def main():
+    # On Windows, set app user model ID before creating window
+    # This ensures the taskbar icon shows correctly
+    import sys
+    if sys.platform == 'win32':
+        try:
+            import ctypes
+            myappid = 'finalfilm.finalwhisper.gui.1'
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+        except Exception:
+            pass
+    
     root = tk.Tk()
     app = WhisperGUI(root)
+    root.protocol("WM_DELETE_WINDOW", app.on_closing)
     root.mainloop()
 
 if __name__ == "__main__":

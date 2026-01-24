@@ -62,16 +62,15 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        # Exclude large packages - user must have these installed
+        # Exclude large ML packages - user must have these installed separately
+        # NOTE: Do NOT exclude numpy - it's needed for basic operations
         'whisper',
         'torch',
         'torchaudio', 
         'torchvision',
-        'numpy',
         'scipy',
         'pandas',
         'matplotlib',
-        'PIL',
         'cv2',
         'tensorflow',
         'keras',
