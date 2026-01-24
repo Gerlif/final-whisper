@@ -2146,12 +2146,22 @@ RULES:
 
     def install_cuda_pytorch_direct(self):
         """Actually perform the PyTorch installation (called after admin check)"""
+        # Prevent multiple simultaneous installations
+        if hasattr(self, '_installing_gpu') and self._installing_gpu:
+            self.log("⚠️ GPU installation already in progress")
+            return
+
+        self._installing_gpu = True
+
         self.log("\n" + "="*60)
         self.log("Installing GPU-accelerated PyTorch...")
         self.log("="*60 + "\n")
+        self.log(f"Admin status: {'Yes' if is_admin() else 'No'}")
+        self.log(f"Python executable: {sys.executable}\n")
 
         def install():
             try:
+                self.root.after(0, lambda: self.log("Installation thread started..."))
                 # Detect CUDA version
                 self.log("Detecting CUDA version...")
                 cuda_version = None
@@ -2225,14 +2235,30 @@ RULES:
                     universal_newlines=True
                 )
 
-                # Stream output with flush
-                for line in process.stdout:
-                    line = line.rstrip()
-                    if line:  # Only log non-empty lines
-                        self.root.after(0, lambda l=line: self.log(l))
+                # Stream output - collect and log periodically
+                output_lines = []
+                try:
+                    while True:
+                        line = process.stdout.readline()
+                        if not line:
+                            break
+                        line = line.rstrip()
+                        if line:
+                            output_lines.append(line)
+                            # Log every 10 lines or important messages
+                            if len(output_lines) % 10 == 0 or 'Error' in line or 'Successfully' in line:
+                                self.root.after(0, lambda lines=output_lines[:]: [self.log(l) for l in lines])
+                                output_lines = []
+                except Exception as e:
+                    self.root.after(0, lambda: self.log(f"Error reading pip output: {e}"))
 
                 process.wait()
-                self.log(f"\nPip install finished with code: {process.returncode}")
+
+                # Log any remaining lines
+                if output_lines:
+                    self.root.after(0, lambda lines=output_lines[:]: [self.log(l) for l in lines])
+
+                self.root.after(0, lambda code=process.returncode: self.log(f"\nPip install finished with code: {code}"))
                 
                 if process.returncode == 0:
                     self.log("\n✅ GPU-accelerated PyTorch installed successfully!")
@@ -2258,11 +2284,16 @@ RULES:
                     self.root.after(0, lambda: self.show_manual_install_instructions(failed=True))
 
             except Exception as e:
-                self.log(f"\n❌ Error during installation: {str(e)}")
+                self.root.after(0, lambda: self.log(f"\n❌ CRITICAL ERROR during installation: {str(e)}"))
                 import traceback
-                self.log(traceback.format_exc())
+                tb = traceback.format_exc()
+                self.root.after(0, lambda: self.log(tb))
                 self.root.after(0, lambda: self.show_manual_install_instructions(failed=True, error=str(e)))
-        
+            finally:
+                # Always clear the installation flag
+                self._installing_gpu = False
+                self.root.after(0, lambda: self.log("Installation thread finished."))
+
         threading.Thread(target=install, daemon=True).start()
 
     def show_manual_install_instructions(self, failed=False, error=None):
