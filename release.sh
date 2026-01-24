@@ -34,10 +34,33 @@ if [ ! -f "version.txt" ]; then
 fi
 
 VERSION=$(cat version.txt | tr -d '[:space:]')
+
+# Ask if user wants to increment version
+echo -e "${YELLOW}Current version: ${GREEN}$VERSION${NC}"
+echo -e "${YELLOW}Do you want to increment the version? (y/N):${NC}"
+read -p "> " INCREMENT
+
+if [[ "$INCREMENT" =~ ^[Yy]$ ]]; then
+    # Increment patch version (1.03 -> 1.04)
+    MAJOR=$(echo $VERSION | cut -d. -f1)
+    MINOR=$(echo $VERSION | cut -d. -f2)
+    NEW_MINOR=$((10#$MINOR + 1))
+    VERSION="$MAJOR.$(printf '%02d' $NEW_MINOR)"
+
+    echo "$VERSION" > version.txt
+    echo -e "${GREEN}Version incremented to: $VERSION${NC}"
+
+    # Commit the version change
+    git add version.txt
+    git commit -m "Bump version to $VERSION"
+    echo -e "${GREEN}Version committed locally${NC}"
+    echo ""
+fi
+
 TAG="v$VERSION"
 TITLE="Final Whisper v$VERSION"
 
-echo -e "${GREEN}Current version:${NC} $VERSION"
+echo -e "${GREEN}Release version:${NC} $VERSION"
 echo -e "${GREEN}Release tag:${NC} $TAG"
 echo -e "${GREEN}Release title:${NC} $TITLE"
 echo ""
@@ -76,6 +99,14 @@ pip install torch --index-url https://download.pytorch.org/whl/cu118
 fi
 
 echo ""
+
+# Push version commit if we incremented
+if [[ "$INCREMENT" =~ ^[Yy]$ ]]; then
+    echo -e "${YELLOW}Pushing version update...${NC}"
+    git push origin main
+    echo ""
+fi
+
 echo -e "${YELLOW}Creating release...${NC}"
 
 # Create the release
