@@ -29,18 +29,6 @@ Final Whisper is a desktop application that automatically generates high-quality
 - Integration with Claude (Anthropic API) for post-transcription corrections
 - Fixes common transcription errors and improves subtitle quality
 
-### 🎨 Modern User Interface
-- Dark theme with purple gradient accents
-- Collapsible settings sections
-- Real-time log output
-- Built-in update checker with **auto-install functionality**
-
-### 🔄 Auto-Update System
-- Checks for new versions on GitHub
-- One-click download and install
-- Automatic restart after update
-- No manual intervention required
-
 ---
 
 ## 📥 Installation
