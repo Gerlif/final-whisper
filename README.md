@@ -4,7 +4,7 @@
 
 Final Whisper is a desktop application that automatically generates high-quality subtitles from video files using OpenAI's Whisper speech recognition model. Designed for film production workflows, it creates professionally formatted SRT subtitle files with intelligent text formatting and optional AI proofreading.
 
-![Version](https://img.shields.io/badge/version-1.05-blue)
+![Version](https://img.shields.io/github/v/release/Gerlif/final-whisper)
 ![Python](https://img.shields.io/badge/python-3.11-green)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
