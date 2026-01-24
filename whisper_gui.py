@@ -8,14 +8,17 @@ By Final Film
 def _get_version():
     try:
         import os
-        # Check for version.txt in same directory as script or exe
+        # Check for version.txt - handle both script and bundled EXE
         if getattr(sys, 'frozen', False):
-            # Running as compiled EXE
-            base_path = os.path.dirname(sys.executable)
+            # Running as compiled EXE - check PyInstaller's temp folder first
+            if hasattr(sys, '_MEIPASS'):
+                base_path = sys._MEIPASS
+            else:
+                base_path = os.path.dirname(sys.executable)
         else:
             # Running as script
             base_path = os.path.dirname(os.path.abspath(__file__))
-        
+
         version_file = os.path.join(base_path, 'version.txt')
         if os.path.exists(version_file):
             with open(version_file, 'r') as f:
@@ -1028,11 +1031,22 @@ class WhisperGUI:
         # Title (right of logo)
         title_frame = ttk.Frame(header_frame)
         title_frame.pack(side=tk.LEFT, fill=tk.Y)
-        
-        title_label = ttk.Label(title_frame, text=f"Final Whisper v{VERSION}", font=("Segoe UI", 18, "bold"))
-        title_label.pack(anchor=tk.W)
-        
-        subtitle_label = ttk.Label(title_frame, text="AI-powered transcription with smart formatting", 
+
+        # Version and update button in same row
+        version_row = ttk.Frame(title_frame)
+        version_row.pack(anchor=tk.W)
+
+        title_label = ttk.Label(version_row, text=f"Final Whisper v{VERSION}", font=("Segoe UI", 18, "bold"))
+        title_label.pack(side=tk.LEFT)
+
+        # Update button (initially hidden)
+        self.update_button = ttk.Button(version_row, text="🔄 Update Available - Click to Install",
+                                       command=self.download_and_install_update, style="Accent.TButton")
+        self.update_button.pack(side=tk.LEFT, padx=10)
+        self.update_button.pack_forget()  # Hide initially
+        self.new_version = None  # Store the new version when available
+
+        subtitle_label = ttk.Label(title_frame, text="AI-powered transcription with smart formatting",
                                    font=("Segoe UI", 9))
         subtitle_label.pack(anchor=tk.W)
         
@@ -1333,19 +1347,99 @@ class WhisperGUI:
             return False
     
     def _show_update_dialog(self, new_version):
-        """Show dialog offering to download update."""
-        result = messagebox.askyesno(
-            "Update Available",
-            f"A new version of Final Whisper is available!\n\n"
-            f"Current version: v{VERSION}\n"
-            f"New version: v{new_version}\n\n"
-            f"Would you like to open the download page?",
-            icon='info'
-        )
-        
-        if result:
-            import webbrowser
-            webbrowser.open(RELEASES_URL)
+        """Show update button when a new version is available."""
+        self.new_version = new_version
+        self.update_button.pack(side=tk.LEFT, padx=10)
+        self.log(f"✨ Update available: v{new_version} (current: v{VERSION})")
+
+    def download_and_install_update(self):
+        """Download and install the latest version."""
+        if not self.new_version:
+            return
+
+        try:
+            import urllib.request
+            import tempfile
+            import subprocess
+
+            # Disable the update button during download
+            self.update_button.config(state='disabled', text='⏳ Downloading update...')
+            self.log(f"📥 Downloading Final Whisper v{self.new_version}...")
+
+            def download_and_replace():
+                try:
+                    # Download the latest EXE
+                    download_url = f"https://github.com/{GITHUB_REPO}/releases/latest/download/Final Whisper.exe"
+
+                    temp_dir = tempfile.gettempdir()
+                    new_exe_path = os.path.join(temp_dir, "Final_Whisper_New.exe")
+
+                    # Download with progress
+                    urllib.request.urlretrieve(download_url, new_exe_path)
+
+                    self.root.after(0, lambda: self.log(f"✅ Downloaded successfully!"))
+                    self.root.after(0, lambda: self.log(f"🔄 Installing update..."))
+
+                    # Get current EXE path
+                    if getattr(sys, 'frozen', False):
+                        current_exe = sys.executable
+                    else:
+                        # For testing in dev mode
+                        self.root.after(0, lambda: messagebox.showinfo(
+                            "Update Downloaded",
+                            f"New version downloaded to:\n{new_exe_path}\n\n"
+                            "(Auto-install only works in compiled EXE)"
+                        ))
+                        return
+
+                    # Create a batch script to replace the EXE after we exit
+                    batch_script = f"""@echo off
+echo Updating Final Whisper...
+timeout /t 2 /nobreak >nul
+taskkill /F /IM "Final Whisper.exe" >nul 2>&1
+timeout /t 1 /nobreak >nul
+move /Y "{new_exe_path}" "{current_exe}"
+echo Update complete!
+timeout /t 2 /nobreak >nul
+start "" "{current_exe}"
+del "%~f0"
+"""
+
+                    batch_path = os.path.join(temp_dir, "update_final_whisper.bat")
+                    with open(batch_path, 'w') as f:
+                        f.write(batch_script)
+
+                    # Show message and exit
+                    self.root.after(0, lambda: messagebox.showinfo(
+                        "Update Ready",
+                        f"Final Whisper v{self.new_version} has been downloaded!\n\n"
+                        "The application will now close and update.\n"
+                        "It will restart automatically after the update."
+                    ))
+
+                    # Launch update script and exit
+                    subprocess.Popen(['cmd', '/c', batch_path],
+                                   creationflags=subprocess.CREATE_NO_WINDOW)
+                    self.root.after(100, self.root.quit)
+
+                except Exception as e:
+                    self.root.after(0, lambda: self.log(f"❌ Update failed: {e}"))
+                    self.root.after(0, lambda: messagebox.showerror(
+                        "Update Failed",
+                        f"Could not download update:\n{e}\n\n"
+                        f"Please download manually from:\n{RELEASES_URL}"
+                    ))
+                    self.root.after(0, lambda: self.update_button.config(
+                        state='normal', text='🔄 Update Available - Click to Install'
+                    ))
+
+            # Run download in background thread
+            threading.Thread(target=download_and_replace, daemon=True).start()
+
+        except Exception as e:
+            self.log(f"❌ Update error: {e}")
+            messagebox.showerror("Update Error", f"Failed to start update:\n{e}")
+            self.update_button.config(state='normal', text='🔄 Update Available - Click to Install')
     
     def get_config_path(self):
         """Get path to config file"""

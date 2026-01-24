@@ -40,6 +40,8 @@ a = Analysis(
         # Include icon and logo files
         ('icon.ico', '.'),
         ('logo.png', '.'),
+        # Include version file
+        ('version.txt', '.'),
     ],
     hiddenimports=[
         'sv_ttk',
