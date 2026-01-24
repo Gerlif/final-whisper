@@ -53,6 +53,10 @@ a = Analysis(
         'PIL',
         'PIL.Image',
         'PIL.ImageTk',
+        'encodings',
+        'encodings.utf_8',
+        'encodings.cp1252',
+        'encodings.mbcs',
     ],
     hookspath=[],
     hooksconfig={},
@@ -83,7 +87,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='FinalFilmSubtitleTool',
+    name='Final Whisper',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -96,14 +100,14 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='icon.ico',  # Final Film icon
+    icon='icon.ico',
 )
 '''
     
-    with open('FinalFilmSubtitleTool.spec', 'w') as f:
+    with open('FinalWhisper.spec', 'w') as f:
         f.write(spec_content)
-    
-    print("✅ Created FinalFilmSubtitleTool.spec\n")
+
+    print("✅ Created FinalWhisper.spec\n")
 
 def build_exe():
     """Build the EXE using PyInstaller"""
@@ -112,13 +116,13 @@ def build_exe():
     
     result = subprocess.run([
         sys.executable, "-m", "PyInstaller",
-        "FinalFilmSubtitleTool.spec",
+        "FinalWhisper.spec",
         "--clean",
         "--noconfirm"
     ], capture_output=False)
     
     if result.returncode == 0:
-        exe_path = Path("dist/FinalFilmSubtitleTool.exe")
+        exe_path = Path("dist/Final Whisper.exe")
         if exe_path.exists():
             size_mb = exe_path.stat().st_size / (1024 * 1024)
             print(f"\n✅ Build successful!")
@@ -134,7 +138,7 @@ def build_exe():
 
 def create_readme():
     """Create a README for the distribution"""
-    readme = '''# Final Film Subtitle Tool
+    readme = '''# Final Whisper
 
 ## Requirements
 
@@ -151,7 +155,7 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 
 ## Usage
 
-1. Double-click `FinalFilmSubtitleTool.exe`
+1. Double-click `Final Whisper.exe`
 2. Select your video file
 3. Choose output folder
 4. Click "Start Transcription"
@@ -160,21 +164,24 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 
 - Automatic speech recognition using OpenAI Whisper
 - Smart subtitle formatting with sentence boundary detection
-- Danish language optimized
+- Multi-language support (optimized for English and Danish)
 - GPU acceleration support
+- Optional AI proofreading with Claude
 - Professional subtitle output (40 chars/line, 2 lines max)
 
 ## Troubleshooting
 
 If the app doesn't start:
-1. Make sure Python is installed
-2. Run `pip install openai-whisper` in terminal
-3. Try running from command line to see errors:
-   ```
-   FinalFilmSubtitleTool.exe
-   ```
+1. Make sure Whisper is installed: `pip install openai-whisper`
+2. Check if antivirus is blocking the EXE
+3. Try running from command line to see errors
 
-Created by Final Film
+For GPU issues:
+- The app will detect your NVIDIA GPU automatically
+- You can install GPU support using the "Setup GPU" button
+- Or manually: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+
+Created by Final Film (with AI assistance)
 '''
     
     with open('dist/README.txt', 'w') as f:
@@ -184,7 +191,7 @@ Created by Final Film
 
 def main():
     print("="*60)
-    print("  Final Film Subtitle Tool - EXE Builder")
+    print("  Final Whisper - EXE Builder")
     print("="*60 + "\n")
     
     # Check if whisper_gui.py exists

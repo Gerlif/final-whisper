@@ -25,6 +25,7 @@ wheels/
 # PyInstaller
 *.manifest
 *.spec
+build/
 
 # Environments
 .env

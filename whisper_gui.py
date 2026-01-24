@@ -1936,14 +1936,30 @@ RULES:
                 import whisper
                 self.log("✅ Whisper is installed")
             except ImportError:
+                self.log("⚠️ Whisper not found")
+
+                # Don't try to auto-install when running as bundled EXE
+                if getattr(sys, 'frozen', False):
+                    self.log("Please install Whisper manually:")
+                    self.log("  pip install openai-whisper")
+                    self.root.after(0, lambda: messagebox.showwarning(
+                        "Whisper Not Installed",
+                        "OpenAI Whisper is not installed.\n\n"
+                        "Please open a command prompt and run:\n"
+                        "pip install openai-whisper\n\n"
+                        "Then restart Final Whisper."
+                    ))
+                    return
+
+                # Auto-install when running as script (development mode)
                 self.log("⚠️ Whisper not found - installing automatically...")
                 self.log("\n" + "="*60)
                 self.log("Installing OpenAI Whisper...")
                 self.log("="*60 + "\n")
-                
+
                 try:
                     install_cmd = [sys.executable, "-m", "pip", "install", "--user", "openai-whisper"]
-                    
+
                     process = subprocess.Popen(
                         install_cmd,
                         stdout=subprocess.PIPE,
@@ -1951,13 +1967,13 @@ RULES:
                         text=True,
                         bufsize=1
                     )
-                    
+
                     # Stream output
                     for line in process.stdout:
                         self.log(line.rstrip())
-                    
+
                     process.wait()
-                    
+
                     if process.returncode == 0:
                         self.log("\n✅ Whisper installed successfully!")
                         self.log("Ready to transcribe!\n")
@@ -1967,11 +1983,11 @@ RULES:
                         messagebox.showerror("Installation Failed",
                             "Failed to install Whisper automatically.\n\n"
                             "Please run: pip install --user openai-whisper")
-                        
+
                 except Exception as e:
                     self.log(f"\n❌ Error during installation: {str(e)}")
                     messagebox.showerror("Error", f"Installation error:\n{str(e)}")
-        
+
         threading.Thread(target=check, daemon=True).start()
     
     def check_gpu_availability(self):
