@@ -1447,33 +1447,45 @@ del "%~f0"
         config_dir.mkdir(exist_ok=True)
         return config_dir / "config.json"
     
-    def load_api_key(self):
-        """Load API key from config file"""
+    def load_config(self):
+        """Load config from file"""
         try:
             config_path = self.get_config_path()
             if config_path.exists():
                 import json
                 with open(config_path, 'r') as f:
-                    config = json.load(f)
-                    if 'anthropic_api_key' in config and config['anthropic_api_key']:
-                        self.anthropic_api_key.set(config['anthropic_api_key'])
-                        # Auto-enable proofreading if we have a saved API key
-                        self.use_ai_proofreading.set(True)
+                    return json.load(f)
+        except Exception:
+            pass
+        return {}
+
+    def save_config(self, config):
+        """Save config to file"""
+        try:
+            import json
+            config_path = self.get_config_path()
+            with open(config_path, 'w') as f:
+                json.dump(config, f)
+        except Exception as e:
+            self.log(f"⚠️ Failed to save config: {e}")
+
+    def load_api_key(self):
+        """Load API key from config file"""
+        try:
+            config = self.load_config()
+            if 'anthropic_api_key' in config and config['anthropic_api_key']:
+                self.anthropic_api_key.set(config['anthropic_api_key'])
+                # Auto-enable proofreading if we have a saved API key
+                self.use_ai_proofreading.set(True)
         except Exception:
             pass
     
     def save_api_key(self):
         """Save API key to config file"""
         try:
-            import json
-            config_path = self.get_config_path()
-            config = {}
-            if config_path.exists():
-                with open(config_path, 'r') as f:
-                    config = json.load(f)
+            config = self.load_config()
             config['anthropic_api_key'] = self.anthropic_api_key.get()
-            with open(config_path, 'w') as f:
-                json.dump(config, f)
+            self.save_config(config)
             self.log("✅ API key saved")
         except Exception as e:
             self.log(f"❌ Failed to save API key: {e}")
@@ -1910,6 +1922,11 @@ RULES:
     
     def offer_gpu_setup(self):
         """Offer to install CUDA-enabled PyTorch"""
+        # Check if user previously declined
+        config = self.load_config()
+        if config.get('gpu_setup_declined', False):
+            return  # Don't ask again
+
         response = messagebox.askyesno(
             "GPU Setup Available",
             "An NVIDIA GPU was detected but PyTorch with CUDA support is not installed.\n\n"
@@ -1917,9 +1934,13 @@ RULES:
             "This will make transcription ~10x faster!\n\n"
             "Installation may take a few minutes."
         )
-        
+
         if response:
             self.install_cuda_pytorch()
+        else:
+            # User declined - remember this choice
+            config['gpu_setup_declined'] = True
+            self.save_config(config)
     
     def install_cuda_pytorch(self):
         """Install CUDA-enabled PyTorch"""
@@ -1980,7 +2001,7 @@ RULES:
                 self.log("This may take several minutes, please wait...\n")
                 
                 install_cmd = [
-                    sys.executable, "-m", "pip", "install", "--user",
+                    sys.executable, "-m", "pip", "install",
                     "torch", "torchvision", "torchaudio",
                     "--index-url", torch_index
                 ]
@@ -2023,16 +2044,22 @@ RULES:
             try:
                 import torch
                 if torch.cuda.is_available():
-                    messagebox.showinfo("GPU Already Working", 
+                    messagebox.showinfo("GPU Already Working",
                         f"GPU is already configured and working!\n\n"
                         f"Detected: {torch.cuda.get_device_name(0)}")
                     return
             except ImportError:
                 pass
-            
-            self.offer_gpu_setup()
+
+            # Clear the declined preference since user is manually requesting setup
+            config = self.load_config()
+            if 'gpu_setup_declined' in config:
+                del config['gpu_setup_declined']
+                self.save_config(config)
+
+            self.install_cuda_pytorch()
         else:
-            messagebox.showwarning("No NVIDIA GPU", 
+            messagebox.showwarning("No NVIDIA GPU",
                 "No NVIDIA GPU detected on this system.\n\n"
                 "GPU acceleration requires an NVIDIA graphics card with CUDA support.")
     
