@@ -981,7 +981,6 @@ class WhisperGUI:
     def set_window_icon(self):
         """Set the window icon (both title bar and taskbar)"""
         try:
-            # Try to load icon from various locations
             import os
             import sys
             
@@ -996,10 +995,37 @@ class WhisperGUI:
             if hasattr(sys, '_MEIPASS'):
                 icon_paths.insert(0, os.path.join(sys._MEIPASS, 'icon.ico'))
             
-            for icon_path in icon_paths:
-                if os.path.exists(icon_path):
-                    self.root.iconbitmap(icon_path)
-                    return
+            icon_path = None
+            for path in icon_paths:
+                if os.path.exists(path):
+                    icon_path = path
+                    break
+            
+            if icon_path:
+                # Set title bar icon (this works reliably)
+                self.root.iconbitmap(default=icon_path)
+                
+                # For taskbar, try to use iconphoto with PIL
+                try:
+                    from PIL import Image, ImageTk
+                    # Load ICO and get the largest size
+                    ico = Image.open(icon_path)
+                    # Convert to PhotoImage
+                    icon_photo = ImageTk.PhotoImage(ico)
+                    self.root.iconphoto(True, icon_photo)
+                    self._icon_photo = icon_photo  # Keep reference to prevent garbage collection
+                except ImportError:
+                    # PIL not available, try with PNG if it exists
+                    try:
+                        png_path = icon_path.replace('.ico', '.png')
+                        if os.path.exists(png_path):
+                            icon_image = tk.PhotoImage(file=png_path)
+                            self.root.iconphoto(True, icon_image)
+                            self._icon_image = icon_image
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
                     
         except Exception:
             pass  # Icon is optional, continue without it
