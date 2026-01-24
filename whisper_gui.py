@@ -52,21 +52,25 @@ def is_admin():
         return False
 
 
-def run_as_admin():
+def run_as_admin(install_gpu=False):
     """Restart the application with administrator privileges"""
     try:
         if getattr(sys, 'frozen', False):
             # Running as EXE
             script = sys.executable
+            params = ""
         else:
             # Running as script
-            script = os.path.abspath(__file__)
+            script = sys.executable
+            params = f'"{os.path.abspath(__file__)}"'
 
-        params = ' '.join([script] + sys.argv[1:])
+        # Add flag to auto-start GPU installation after elevation
+        if install_gpu:
+            params += " --install-gpu"
 
         # Request elevation
         ctypes.windll.shell32.ShellExecuteW(
-            None, "runas", sys.executable, params, None, 1
+            None, "runas", script, params, None, 1
         )
         return True
     except Exception as e:
@@ -812,9 +816,15 @@ class WhisperGUI:
         self.create_widgets()
         self.check_whisper_installation()
         self.check_gpu_availability()
-        
+
         # Check for updates in background
         self.check_for_updates()
+
+        # Check if we were launched with --install-gpu flag (after admin elevation)
+        if '--install-gpu' in sys.argv:
+            self.log("🔧 Auto-starting GPU installation (elevated privileges)")
+            # Give the UI time to load, then start installation
+            self.root.after(1000, self.install_cuda_pytorch_direct)
     
     def set_window_icon(self):
         """Set the window icon"""
@@ -2057,7 +2067,7 @@ RULES:
             )
 
             if response:
-                if run_as_admin():
+                if run_as_admin(install_gpu=True):
                     # Successfully requested elevation, close this instance
                     self.root.quit()
                     return
@@ -2071,6 +2081,11 @@ RULES:
                 self.show_manual_install_instructions()
                 return
 
+        # If we get here, we have admin rights - proceed with installation
+        self.install_cuda_pytorch_direct()
+
+    def install_cuda_pytorch_direct(self):
+        """Actually perform the PyTorch installation (called after admin check)"""
         self.log("\n" + "="*60)
         self.log("Installing GPU-accelerated PyTorch...")
         self.log("="*60 + "\n")
