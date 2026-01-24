@@ -1440,7 +1440,24 @@ del "%~f0"
             self.log(f"❌ Update error: {e}")
             messagebox.showerror("Update Error", f"Failed to start update:\n{e}")
             self.update_button.config(state='normal', text='🔄 Update Available - Click to Install')
-    
+
+    def restart_application(self):
+        """Restart the application"""
+        try:
+            if getattr(sys, 'frozen', False):
+                # Running as EXE - restart it
+                subprocess.Popen([sys.executable])
+            else:
+                # Running as script - restart it
+                subprocess.Popen([sys.executable, __file__])
+
+            # Close current instance
+            self.root.quit()
+        except Exception as e:
+            self.log(f"❌ Failed to restart: {e}")
+            messagebox.showerror("Restart Failed",
+                f"Please manually restart the application.\n\nError: {e}")
+
     def get_config_path(self):
         """Get path to config file"""
         config_dir = Path.home() / ".final_whisper"
@@ -1915,16 +1932,30 @@ RULES:
     def check_nvidia_gpu(self):
         """Check if NVIDIA GPU is present using nvidia-smi"""
         try:
-            result = subprocess.run(['nvidia-smi'], capture_output=True, timeout=5)
-            return result.returncode == 0
+            # Try common nvidia-smi locations
+            nvidia_smi_paths = [
+                'nvidia-smi',  # In PATH
+                r'C:\Windows\System32\nvidia-smi.exe',
+                r'C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe',
+            ]
+
+            for nvidia_smi in nvidia_smi_paths:
+                try:
+                    result = subprocess.run([nvidia_smi], capture_output=True, timeout=5,
+                                          creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0)
+                    if result.returncode == 0:
+                        return True
+                except:
+                    continue
+            return False
         except:
             return False
     
     def offer_gpu_setup(self):
         """Offer to install CUDA-enabled PyTorch"""
-        # Check if user previously declined
+        # Check if user previously declined or already completed setup
         config = self.load_config()
-        if config.get('gpu_setup_declined', False):
+        if config.get('gpu_setup_declined', False) or config.get('gpu_setup_completed', False):
             return  # Don't ask again
 
         response = messagebox.askyesno(
@@ -2022,10 +2053,20 @@ RULES:
                 
                 if process.returncode == 0:
                     self.log("\n✅ GPU-accelerated PyTorch installed successfully!")
-                    self.log("\nPlease restart the application to use GPU acceleration.")
-                    messagebox.showinfo("Success", 
+                    self.log("\nRestarting application...")
+
+                    # Mark that GPU setup was completed successfully
+                    config = self.load_config()
+                    config['gpu_setup_completed'] = True
+                    self.save_config(config)
+
+                    # Show success message and restart
+                    self.root.after(0, lambda: messagebox.showinfo("Success",
                         "GPU-accelerated PyTorch installed successfully!\n\n"
-                        "Please restart this application to use GPU acceleration.")
+                        "The application will now restart to enable GPU acceleration."))
+
+                    # Restart the application
+                    self.root.after(100, self.restart_application)
                 else:
                     self.log("\n❌ Installation failed!")
                     messagebox.showerror("Installation Failed",
@@ -2051,11 +2092,13 @@ RULES:
             except ImportError:
                 pass
 
-            # Clear the declined preference since user is manually requesting setup
+            # Clear the preferences since user is manually requesting setup
             config = self.load_config()
             if 'gpu_setup_declined' in config:
                 del config['gpu_setup_declined']
-                self.save_config(config)
+            if 'gpu_setup_completed' in config:
+                del config['gpu_setup_completed']
+            self.save_config(config)
 
             self.install_cuda_pytorch()
         else:
