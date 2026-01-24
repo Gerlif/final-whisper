@@ -158,35 +158,6 @@ The subtitle formatting engine uses several intelligent rules:
 
 ---
 
-## 🛠️ Development
-
-### Release Workflow
-
-This project uses GitHub Actions for automated builds:
-
-1. Make code changes and push to `main`
-2. Run `./release.sh` to create a new release
-3. GitHub Actions automatically builds the EXE
-4. EXE is attached to the release
-5. Users get notified of the update in-app
-
-### Project Structure
-
-```
-final-whisper/
-├── whisper_gui.py          # Main application
-├── build_exe.py            # Build script
-├── release.sh              # Release creation script
-├── version.txt             # Current version
-├── icon.ico                # App icon
-├── logo.png                # Header logo
-└── .github/
-    └── workflows/
-        └── build.yml       # Automated build workflow
-```
-
----
-
 ## 🐛 Troubleshooting
 
 **App won't start:**
