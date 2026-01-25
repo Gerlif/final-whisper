@@ -593,34 +593,85 @@ def is_orphan_word(word_text):
 
 def generate_smart_srt(result, output_file, max_chars_per_line=42, max_lines=2):
     """
-    Generate SRT file from Whisper result.
-    Uses Whisper's segment timing directly (it's already well-optimized).
-    Only does line balancing for readability.
+    Generate SRT file from Whisper result using Whisper's built-in writer.
+    Uses max_line_width and max_line_count for proper line formatting.
     
     Args:
-        result: Whisper transcription result
+        result: Whisper transcription result (with word_timestamps=True)
         output_file: Path to output SRT file
         max_chars_per_line: Maximum characters per line (default 42)
         max_lines: Maximum lines per subtitle (default 2)
     """
+    from pathlib import Path
+    
+    try:
+        from whisper.utils import get_writer
+        
+        output_path = Path(output_file)
+        output_dir = str(output_path.parent)
+        
+        # Whisper's writer options
+        writer_options = {
+            "max_line_width": max_chars_per_line,
+            "max_line_count": max_lines,
+            "highlight_words": False
+        }
+        
+        # Get the SRT writer
+        srt_writer = get_writer("srt", output_dir)
+        
+        # Write the SRT file - Whisper expects the audio filename to derive output name
+        # We need to trick it by using a fake audio path with the right stem
+        fake_audio_path = str(output_path.parent / (output_path.stem + ".mp4"))
+        
+        srt_writer(result, fake_audio_path, writer_options)
+        
+    except ImportError:
+        # Fallback if whisper.utils is not available - use our own implementation
+        _generate_srt_fallback(result, output_file, max_chars_per_line, max_lines)
+    except Exception as e:
+        # If Whisper's writer fails, use fallback
+        print(f"Whisper writer failed ({e}), using fallback...")
+        _generate_srt_fallback(result, output_file, max_chars_per_line, max_lines)
+
+
+def _generate_srt_fallback(result, output_file, max_chars_per_line=42, max_lines=2):
+    """
+    Fallback SRT generation if Whisper's writer is not available.
+    Splits long segments into multiple subtitles if needed.
+    """
+    max_subtitle_chars = max_chars_per_line * max_lines
     subtitles = []
     
     for segment in result.get('segments', []):
         text = segment.get('text', '').strip()
         if not text:
             continue
+        
+        # If text fits in one subtitle (2 lines), use it directly
+        if len(text) <= max_subtitle_chars:
+            subtitles.append({
+                'start': segment['start'],
+                'end': segment['end'],
+                'text': text
+            })
+        else:
+            # Text is too long - split into multiple subtitles
+            words_data = segment.get('words', [])
             
-        subtitles.append({
-            'start': segment['start'],
-            'end': segment['end'],
-            'text': text
-        })
+            if words_data:
+                subtitles.extend(split_segment_by_words(
+                    words_data, segment['start'], segment['end'], 
+                    max_subtitle_chars
+                ))
+            else:
+                subtitles.extend(split_segment_evenly(
+                    text, segment['start'], segment['end'],
+                    max_subtitle_chars
+                ))
     
     if not subtitles:
         return
-    
-    # Optional: merge very short segments (1-2 words) with neighbors
-    subtitles = merge_tiny_segments(subtitles, max_chars_per_line * max_lines)
     
     # Write SRT file
     with open(output_file, 'w', encoding='utf-8') as f:
@@ -629,20 +680,91 @@ def generate_smart_srt(result, output_file, max_chars_per_line=42, max_lines=2):
             if not text:
                 continue
             
-            # Balance lines for readability
             lines = split_balanced_lines(text, max_chars_per_line)
             
-            # Limit to max lines
-            if len(lines) > max_lines:
-                lines = lines[:max_lines]
-            
-            # Write subtitle entry
             start_ts = format_timestamp(sub['start'])
             end_ts = format_timestamp(sub['end'])
             
             f.write(f"{i}\n")
             f.write(f"{start_ts} --> {end_ts}\n")
             f.write('\n'.join(lines) + '\n\n')
+
+
+def split_segment_by_words(words_data, seg_start, seg_end, max_chars):
+    """Split a segment using word-level timestamps."""
+    subtitles = []
+    current_words = []
+    current_text = ""
+    
+    for word_info in words_data:
+        word = word_info.get('word', '').strip()
+        if not word:
+            continue
+        
+        test_text = (current_text + ' ' + word).strip() if current_text else word
+        
+        if len(test_text) > max_chars and current_words:
+            # Save current subtitle
+            subtitles.append({
+                'start': current_words[0].get('start', seg_start),
+                'end': current_words[-1].get('end', seg_end),
+                'text': current_text
+            })
+            current_words = [word_info]
+            current_text = word
+        else:
+            current_words.append(word_info)
+            current_text = test_text
+    
+    # Don't forget the last chunk
+    if current_words:
+        subtitles.append({
+            'start': current_words[0].get('start', seg_start),
+            'end': current_words[-1].get('end', seg_end),
+            'text': current_text
+        })
+    
+    return subtitles
+
+
+def split_segment_evenly(text, start_time, end_time, max_chars):
+    """Split text into chunks and distribute time evenly."""
+    words = text.split()
+    subtitles = []
+    
+    current_words = []
+    current_text = ""
+    
+    for word in words:
+        test_text = (current_text + ' ' + word).strip() if current_text else word
+        
+        if len(test_text) > max_chars and current_words:
+            subtitles.append({'text': current_text, 'word_count': len(current_words)})
+            current_words = [word]
+            current_text = word
+        else:
+            current_words.append(word)
+            current_text = test_text
+    
+    if current_words:
+        subtitles.append({'text': current_text, 'word_count': len(current_words)})
+    
+    # Distribute time based on word count
+    total_words = sum(s['word_count'] for s in subtitles)
+    duration = end_time - start_time
+    
+    current_time = start_time
+    result = []
+    for sub in subtitles:
+        sub_duration = (sub['word_count'] / total_words) * duration if total_words > 0 else duration / len(subtitles)
+        result.append({
+            'start': current_time,
+            'end': current_time + sub_duration,
+            'text': sub['text']
+        })
+        current_time += sub_duration
+    
+    return result
 
 
 def merge_tiny_segments(subtitles, max_chars):
