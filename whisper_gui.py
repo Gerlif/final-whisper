@@ -775,8 +775,8 @@ def merge_tiny_segments(subtitles, max_chars):
             
         return False
     
-    # Allow 10% overflow to avoid orphans
-    max_chars_with_overflow = int(max_chars * 1.1)
+    # Allow 20% overflow to avoid orphans (better than having tiny segments)
+    max_chars_with_overflow = int(max_chars * 1.2)
     
     # Multiple passes to catch chains of short segments
     for pass_num in range(5):  # More passes
