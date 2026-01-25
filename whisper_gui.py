@@ -1593,7 +1593,7 @@ class WhisperGUI:
                 self.log_text.insert(tk.END, message + "\n", 'warning')
             elif message.startswith('📥') or message.startswith('💡') or message.startswith('🔍') or message.startswith('🎤') or message.startswith('📁') or message.startswith('🎬') or message.startswith('📄'):
                 self.log_text.insert(tk.END, message + "\n", 'info')
-            elif message.startswith('===') or message.startswith('---') or message.startswith('═') or (len(message) > 10 and len(message.replace('=', '').replace('-', '').replace(' ', '')) == 0):
+            elif message.strip().startswith('===') or message.strip().startswith('---') or message.startswith('═') or (len(message.strip()) > 10 and len(message.strip().replace('=', '').replace('-', '')) == 0):
                 self.log_text.insert(tk.END, message + "\n", 'header')
             elif message.startswith('  Batch') or message.startswith('Processing in batches'):
                 self.log_text.insert(tk.END, message + "\n", 'dim')
@@ -3861,23 +3861,23 @@ else:
             self.timer_running = False
             return
         
-        # Don't update if detailed progress was recently set (within last 2 seconds)
-        # This allows the transcription progress updates to control the display
-        last_detail_update = getattr(self, '_last_detail_progress_time', 0)
-        if time.time() - last_detail_update < 2.0:
-            return
-        
         time_elapsed = time.time() - self.transcription_start_time
         elapsed_min = int(time_elapsed // 60)
         elapsed_sec = int(time_elapsed % 60)
         
-        # Check if we're in proofreading mode
+        # Check if we're in proofreading mode - always update in this mode
         if getattr(self, '_proofreading_mode', False):
             batch_info = getattr(self, '_proofreading_batch_info', None)
             if batch_info:
                 self.set_progress_text(f"AI Proofreading... {batch_info} | Elapsed: {elapsed_min}:{elapsed_sec:02d}")
             else:
                 self.set_progress_text(f"AI Proofreading... | Elapsed: {elapsed_min}:{elapsed_sec:02d}")
+            return
+        
+        # Don't update if detailed progress was recently set (within last 2 seconds)
+        # This allows the transcription progress updates to control the display
+        last_detail_update = getattr(self, '_last_detail_progress_time', 0)
+        if time.time() - last_detail_update < 2.0:
             return
         
         # If we have ETA/Speed info, update the whole string with new elapsed time
