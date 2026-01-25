@@ -894,7 +894,7 @@ class WhisperGUI:
     def __init__(self, root):
         self.root = root
         self.root.title(f"Final Whisper v{VERSION}")
-        self.root.geometry("1100x900")
+        self.root.geometry("1300x900")
         
         # Set window icon
         self.set_window_icon()
@@ -1478,7 +1478,7 @@ class WhisperGUI:
         log_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
         # Create log with dark theme
-        self.log_text = scrolledtext.ScrolledText(log_frame, height=32, width=55, state='disabled',
+        self.log_text = scrolledtext.ScrolledText(log_frame, height=32, width=70, state='disabled',
                                                    bg='#1e1e1e', fg='#d4d4d4', insertbackground='#ffffff',
                                                    relief='flat', font=('Consolas', 9), padx=8, pady=8)
         self.log_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
