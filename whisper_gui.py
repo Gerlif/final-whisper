@@ -591,142 +591,46 @@ def is_orphan_word(word_text):
     return clean in ORPHAN_WORDS
 
 
-def generate_smart_srt(result, output_file, max_chars_per_line=40, max_lines=2):
+def generate_smart_srt(result, output_file, max_chars_per_line=42, max_lines=2):
     """
-    Generate SRT file from Whisper result using word-level timestamps.
-    Splits subtitles at sentence boundaries and avoids orphaned words.
+    Generate SRT file from Whisper result.
+    Uses Whisper's segment timing directly (it's already well-optimized).
+    Only does line balancing for readability.
     
     Args:
-        result: Whisper transcription result with word_timestamps=True
+        result: Whisper transcription result
         output_file: Path to output SRT file
-        max_chars_per_line: Maximum characters per line
-        max_lines: Maximum lines per subtitle (typically 2)
+        max_chars_per_line: Maximum characters per line (default 42)
+        max_lines: Maximum lines per subtitle (default 2)
     """
-    max_subtitle_chars = max_chars_per_line * max_lines
     subtitles = []
     
-    # First, collect ALL words with their timestamps from all segments
-    all_words = []
     for segment in result.get('segments', []):
-        words = segment.get('words', [])
-        if not words:
-            # Fallback if no word-level timestamps - use segment timing
-            text = segment['text'].strip()
-            if text:
-                # Split segment text into words and distribute timing evenly
-                segment_words = text.split()
-                if segment_words:
-                    duration = segment['end'] - segment['start']
-                    time_per_word = duration / len(segment_words)
-                    for j, word in enumerate(segment_words):
-                        all_words.append({
-                            'word': word,
-                            'start': segment['start'] + j * time_per_word,
-                            'end': segment['start'] + (j + 1) * time_per_word
-                        })
-        else:
-            for word_info in words:
-                word = word_info.get('word', '').strip()
-                if word:
-                    all_words.append({
-                        'word': word,
-                        'start': word_info.get('start', 0),
-                        'end': word_info.get('end', 0)
-                    })
+        text = segment.get('text', '').strip()
+        if not text:
+            continue
+            
+        subtitles.append({
+            'start': segment['start'],
+            'end': segment['end'],
+            'text': text
+        })
     
-    if not all_words:
+    if not subtitles:
         return
     
-    # Now group words into subtitles, looking ahead to avoid orphans
-    current_words = []
-    current_chars = 0
-    i = 0
-    
-    while i < len(all_words):
-        word_info = all_words[i]
-        word = word_info['word']
-        word_len = len(word) + (1 if current_words else 0)  # +1 for space
-        
-        # Check if we should start a new subtitle
-        should_split = False
-        
-        # Rule 1: Character limit exceeded - must split
-        if current_chars + word_len > max_subtitle_chars and current_words:
-            should_split = True
-        
-        # Rule 2: Previous word ended a sentence - only split if we have enough content
-        elif current_words and current_chars >= MIN_CHARS_BEFORE_SPLIT:
-            prev_word = current_words[-1]['word']
-            if is_sentence_end(prev_word):
-                # Look ahead: would the next subtitle be too short (orphaned)?
-                remaining_chars = sum(len(all_words[j]['word']) + 1 for j in range(i, min(i + 4, len(all_words))))
-                if remaining_chars >= 15:  # Only split if next subtitle will have enough content
-                    should_split = True
-        
-        if should_split:
-            # Check for orphan words at end - move them to next subtitle
-            while (current_words and 
-                   is_orphan_word(current_words[-1]['word']) and 
-                   len(current_words) > 3):  # Keep at least 3 words
-                orphan = current_words.pop()
-                # Put it back for next iteration
-                i -= 1
-                all_words[i] = orphan
-            
-            if current_words:
-                # Save current subtitle
-                text = ' '.join(w['word'].strip() for w in current_words)
-                text = ' '.join(text.split())  # Normalize spaces
-                if text.strip():
-                    subtitles.append({
-                        'start': current_words[0]['start'],
-                        'end': current_words[-1]['end'],
-                        'text': text,
-                        'words': current_words.copy()  # Keep word data for potential re-timing
-                    })
-                current_words = []
-                current_chars = 0
-                continue  # Don't increment i, process this word again
-        
-        # Add word to current subtitle
-        current_words.append(word_info.copy())
-        current_chars += len(word) + (1 if len(current_words) > 1 else 0)
-        i += 1
-    
-    # Don't forget the last subtitle
-    if current_words:
-        text = ' '.join(w['word'].strip() for w in current_words)
-        text = ' '.join(text.split())
-        if text.strip():
-            subtitles.append({
-                'start': current_words[0]['start'],
-                'end': current_words[-1]['end'],
-                'text': text,
-                'words': current_words.copy()
-            })
-    
-    # Merge very short subtitles with neighbors (preserving word timestamps)
-    subtitles = merge_short_subtitles_with_words(subtitles, MIN_SUBTITLE_CHARS, max_subtitle_chars)
-    
-    # Remove empty subtitles
-    subtitles = [s for s in subtitles if s['text'].strip()]
-    
-    # Enforce minimum subtitle duration (but respect word timestamps)
-    subtitles = enforce_minimum_duration(subtitles, min_duration=1.2)
+    # Optional: merge very short segments (1-2 words) with neighbors
+    subtitles = merge_tiny_segments(subtitles, max_chars_per_line * max_lines)
     
     # Write SRT file
     with open(output_file, 'w', encoding='utf-8') as f:
         for i, sub in enumerate(subtitles, 1):
-            # Skip empty subtitles
-            if not sub['text'].strip():
+            text = sub['text'].strip()
+            if not text:
                 continue
-                
-            # Format lines within subtitle
-            lines = split_balanced_lines(sub['text'], max_chars_per_line)
             
-            # Fix orphaned words within lines
-            if len(lines) >= 2:
-                lines = fix_line_orphans(lines, max_chars_per_line)
+            # Balance lines for readability
+            lines = split_balanced_lines(text, max_chars_per_line)
             
             # Limit to max lines
             if len(lines) > max_lines:
@@ -738,19 +642,13 @@ def generate_smart_srt(result, output_file, max_chars_per_line=40, max_lines=2):
             
             f.write(f"{i}\n")
             f.write(f"{start_ts} --> {end_ts}\n")
-            f.write('\n'.join(lines))
-            f.write('\n\n')
+            f.write('\n'.join(lines) + '\n\n')
 
 
-def merge_short_subtitles(subtitles, min_chars, max_chars):
-    """Legacy function - redirects to word-aware version"""
-    return merge_short_subtitles_with_words(subtitles, min_chars, max_chars)
-
-
-def merge_short_subtitles_with_words(subtitles, min_chars, max_chars):
+def merge_tiny_segments(subtitles, max_chars):
     """
-    Merge subtitles that are too short with their neighbors.
-    Preserves word-level timestamps for accurate timing.
+    Merge only very short segments (1-2 words) with their neighbors.
+    Keeps Whisper's timing mostly intact.
     """
     if len(subtitles) <= 1:
         return subtitles
@@ -758,181 +656,45 @@ def merge_short_subtitles_with_words(subtitles, min_chars, max_chars):
     def word_count(text):
         return len(text.split())
     
-    def is_complete_sentence(text):
-        """Check if text ends with sentence punctuation"""
-        text = text.strip()
-        return text.endswith(('.', '?', '!', '"', "'"))
-    
-    def should_merge(text):
-        """Determine if a subtitle should be merged with neighbor"""
-        words = word_count(text)
-        chars = len(text)
-        
-        # Always merge 1-2 word subtitles
-        if words <= 2:
-            return True
-        
-        # Merge short fragments that don't end sentences
-        if words <= 4 and chars < 25 and not is_complete_sentence(text):
-            return True
-        
-        return False
-    
-    def merge_two_subtitles(sub1, sub2):
-        """Merge two subtitles, preserving word-level data"""
-        combined_text = sub1['text'] + ' ' + sub2['text']
-        combined_words = sub1.get('words', []) + sub2.get('words', [])
-        
-        # Use word timestamps if available, otherwise use subtitle timestamps
-        if combined_words:
-            return {
-                'start': combined_words[0]['start'],
-                'end': combined_words[-1]['end'],
-                'text': combined_text,
-                'words': combined_words
-            }
-        else:
-            return {
-                'start': sub1['start'],
-                'end': sub2['end'],
-                'text': combined_text
-            }
-    
-    # First pass: merge short subtitles with neighbors
     merged = []
     i = 0
     
     while i < len(subtitles):
         current = subtitles[i]
+        words = word_count(current['text'])
         
-        if should_merge(current['text']):
-            merged_successfully = False
-            
-            # Try to merge with PREVIOUS subtitle first
+        # Only merge if 1-2 words AND doesn't end with sentence punctuation
+        if words <= 2 and not current['text'].strip().endswith(('.', '?', '!')):
+            # Try to merge with previous
             if merged:
                 prev = merged[-1]
-                combined_text = prev['text'] + ' ' + current['text']
-                
-                if len(combined_text) <= max_chars:
-                    merged[-1] = merge_two_subtitles(prev, current)
+                combined = prev['text'] + ' ' + current['text']
+                if len(combined) <= max_chars:
+                    merged[-1] = {
+                        'start': prev['start'],
+                        'end': current['end'],
+                        'text': combined
+                    }
                     i += 1
-                    merged_successfully = True
+                    continue
             
-            # If couldn't merge with previous, try next
-            if not merged_successfully and i + 1 < len(subtitles):
+            # Try to merge with next
+            if i + 1 < len(subtitles):
                 next_sub = subtitles[i + 1]
-                combined_text = current['text'] + ' ' + next_sub['text']
-                
-                if len(combined_text) <= max_chars:
-                    merged.append(merge_two_subtitles(current, next_sub))
+                combined = current['text'] + ' ' + next_sub['text']
+                if len(combined) <= max_chars:
+                    merged.append({
+                        'start': current['start'],
+                        'end': next_sub['end'],
+                        'text': combined
+                    })
                     i += 2
-                    merged_successfully = True
-            
-            if merged_successfully:
-                continue
+                    continue
         
         merged.append(current)
         i += 1
     
-    # Second pass: catch any remaining short subtitles
-    final = []
-    for sub in merged:
-        if should_merge(sub['text']) and final:
-            prev = final[-1]
-            combined_text = prev['text'] + ' ' + sub['text']
-            if len(combined_text) <= max_chars:
-                final[-1] = merge_two_subtitles(prev, sub)
-                continue
-        final.append(sub)
-    
-    # Third pass: force merge any remaining 1-2 word orphans
-    result = []
-    for sub in final:
-        words = word_count(sub['text'])
-        if words <= 2 and result:
-            prev = result[-1]
-            combined_text = prev['text'] + ' ' + sub['text']
-            if len(combined_text) <= max_chars + 20:  # Allow slight overflow
-                result[-1] = merge_two_subtitles(prev, sub)
-                continue
-        result.append(sub)
-    
-    return result
-
-
-def enforce_minimum_duration(subtitles, min_duration=1.2, extend_duration=0.5):
-    """
-    Extend subtitle end times to ensure minimum display duration.
-    Uses conservative extension to preserve sync with audio.
-    
-    Args:
-        subtitles: List of subtitle dicts with 'start', 'end', 'text'
-        min_duration: Minimum duration in seconds (default 1.2s)
-        extend_duration: Extra time to add after subtitle ends (default 0.5s)
-    
-    Returns:
-        List of subtitles with adjusted end times
-    """
-    if not subtitles:
-        return subtitles
-    
-    adjusted = []
-    for i, sub in enumerate(subtitles):
-        current_end = sub['end']
-        
-        # Calculate the ideal new end time:
-        # Either min_duration from start, or extend_duration after current end, whichever is later
-        min_end = sub['start'] + min_duration
-        extended_end = current_end + extend_duration
-        ideal_end = max(min_end, extended_end)
-        
-        # Check if there's a next subtitle
-        if i + 1 < len(subtitles):
-            next_start = subtitles[i + 1]['start']
-            # Don't overlap with next subtitle - leave small gap (0.05s)
-            max_end = next_start - 0.05
-            new_end = min(ideal_end, max_end)
-        else:
-            # Last subtitle - can extend freely
-            new_end = ideal_end
-        
-        # Only extend if we actually gain duration
-        if new_end > current_end:
-            adjusted.append({
-                'start': sub['start'],
-                'end': new_end,
-                'text': sub['text']
-            })
-        else:
-            adjusted.append(sub)
-    
-    return adjusted
-
-
-def fix_line_orphans(lines, max_chars):
-    """
-    Fix orphaned words at line ends within a subtitle.
-    """
-    if len(lines) < 2:
-        return lines
-    
-    fixed = list(lines)
-    
-    for i in range(len(fixed) - 1):
-        words = fixed[i].split()
-        if not words:
-            continue
-        
-        last_word = words[-1]
-        if is_orphan_word(last_word):
-            new_current = ' '.join(words[:-1])
-            new_next = last_word + ' ' + fixed[i + 1]
-            
-            if new_current and len(new_next) <= max_chars:
-                fixed[i] = new_current
-                fixed[i + 1] = new_next
-    
-    return fixed
+    return merged
 
 
 class WhisperGUI:
