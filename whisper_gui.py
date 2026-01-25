@@ -1505,9 +1505,16 @@ class WhisperGUI:
                                    command=self.stop_transcription, state='disabled')
         self.stop_btn.pack(side=tk.LEFT, expand=True, fill=tk.X)
         
-        # Batch file label (shown during processing)
-        self.batch_file_label = ttk.Label(left_frame, text="", font=("Segoe UI", 9))
+        # Batch file label (shown during processing) - Text widget for mixed formatting
+        self.batch_file_label = tk.Text(left_frame, height=1, width=60, 
+                                        bg='#1e1e1e', fg='#d4d4d4', 
+                                        relief='flat', font=('Segoe UI', 9),
+                                        highlightthickness=0, borderwidth=0,
+                                        pady=0, padx=0)
         self.batch_file_label.grid(row=6, column=0, sticky=tk.W, pady=(8, 6))
+        self.batch_file_label.tag_configure('normal', foreground='#d4d4d4')
+        self.batch_file_label.tag_configure('bold', foreground='#ffffff', font=('Segoe UI', 9, 'bold'))
+        self.batch_file_label.configure(state='disabled')
         
         # Progress
         self.progress = GradientProgressBar(left_frame)
@@ -1586,7 +1593,7 @@ class WhisperGUI:
                 self.log_text.insert(tk.END, message + "\n", 'warning')
             elif message.startswith('📥') or message.startswith('💡') or message.startswith('🔍') or message.startswith('🎤') or message.startswith('📁') or message.startswith('🎬') or message.startswith('📄'):
                 self.log_text.insert(tk.END, message + "\n", 'info')
-            elif message.startswith('===') or message.startswith('---') or (len(message) > 10 and message.strip('=- ') == ''):
+            elif message.startswith('===') or message.startswith('---') or message.startswith('═') or (len(message) > 10 and len(message.replace('=', '').replace('-', '').replace(' ', '')) == 0):
                 self.log_text.insert(tk.END, message + "\n", 'header')
             elif message.startswith('  Batch') or message.startswith('Processing in batches'):
                 self.log_text.insert(tk.END, message + "\n", 'dim')
@@ -1621,6 +1628,23 @@ class WhisperGUI:
     def get_progress_text(self):
         """Get current progress label text"""
         return self.progress_label.get('1.0', tk.END).strip()
+    
+    def set_batch_file_text(self, prefix="", filename=""):
+        """Set batch file label text with bold filename"""
+        self.batch_file_label.configure(state='normal')
+        self.batch_file_label.delete('1.0', tk.END)
+        
+        if prefix or filename:
+            self.batch_file_label.insert(tk.END, prefix, 'normal')
+            self.batch_file_label.insert(tk.END, filename, 'bold')
+        
+        self.batch_file_label.configure(state='disabled')
+    
+    def clear_batch_file_text(self):
+        """Clear the batch file label"""
+        self.batch_file_label.configure(state='normal')
+        self.batch_file_label.delete('1.0', tk.END)
+        self.batch_file_label.configure(state='disabled')
     
     def update_features_display(self):
         """Update the features label based on smart formatting checkbox"""
@@ -3651,8 +3675,8 @@ else:
         # Show the batch controls
         self.batch_context_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(4, 0))
         
-        # Update the file indicator
-        self._update_batch_file_indicator()
+        # Set initial state based on checkbox (same prompt is default)
+        self._toggle_same_prompt()
     
     def _hide_batch_context_controls(self):
         """Hide the batch context controls"""
@@ -3768,7 +3792,7 @@ else:
             self.batch_total = 1
             # Show filename for single file
             filename = Path(self.video_path.get()).name
-            self.batch_file_label.config(text=f"📄 {filename}")
+            self.set_batch_file_text("📄 ", filename)
             
         # Create output directory
         os.makedirs(self.output_dir.get(), exist_ok=True)
@@ -3909,7 +3933,7 @@ else:
                     def reset_for_next_file(idx=i+1, total=self.batch_total, name=file_path.name):
                         self.progress['value'] = 0
                         self.progress.start_animation()
-                        self.batch_file_label.config(text=f"📄 File {idx}/{total}: {name}")
+                        self.set_batch_file_text(f"📄 File {idx}/{total}: ", name)
                     self.root.after(0, reset_for_next_file)
                     
                     # Set current file for transcription
@@ -3922,7 +3946,7 @@ else:
                         self._run_transcription_direct_single(str(file_path), file_index=i)
                 
                 # Clear batch label when done
-                self.root.after(0, lambda: self.batch_file_label.config(text=""))
+                self.root.after(0, lambda: self.clear_batch_file_text())
                 
                 if not self.stop_requested:
                     self.root.after(0, lambda: self.log(f"\n{'='*60}"))
@@ -3950,7 +3974,7 @@ else:
         self.progress.stop_animation()
         self.process_btn.config(state='normal')
         self.stop_btn.config(state='disabled')
-        self.batch_file_label.config(text="")  # Clear batch file label
+        self.clear_batch_file_text()  # Clear batch file label
         
         if was_stopped:
             # User cancelled - reset progress
