@@ -1316,7 +1316,7 @@ class WhisperGUI:
         
         ttk.Label(file_frame, text="Output Folder:").grid(row=1, column=0, sticky=tk.W, pady=(8,0))
         ttk.Entry(file_frame, textvariable=self.output_dir, width=38).grid(row=1, column=1, padx=8, pady=(8,0))
-        ttk.Button(file_frame, text="Browse", command=self.browse_output).grid(row=1, column=2, pady=(8,0))
+        ttk.Button(file_frame, text="Browse", command=self.browse_output).grid(row=1, column=2, sticky=tk.W, pady=(8,0))
         
         # Transcription settings (row 1)
         self.transcription_section = CollapsibleFrame(left_frame, text="Transcription")
@@ -1468,7 +1468,7 @@ class WhisperGUI:
         
         # Batch file label (shown during processing)
         self.batch_file_frame = ttk.Frame(left_frame)
-        self.batch_file_frame.grid(row=6, column=0, sticky=tk.W, pady=(0, 2))
+        self.batch_file_frame.grid(row=6, column=0, sticky=tk.W, pady=(8, 6))
         self.batch_file_icon = ttk.Label(self.batch_file_frame, text="", font=("Segoe UI", 9))
         self.batch_file_icon.pack(side=tk.LEFT)
         self.batch_file_name = ttk.Label(self.batch_file_frame, text="", font=("Segoe UI", 9, "bold"))
@@ -1480,9 +1480,10 @@ class WhisperGUI:
         
         # Progress label as Text widget for colored segments
         self.progress_label = tk.Text(left_frame, height=1, width=70, 
-                                      bg='#2b2b2b', fg='#d4d4d4', 
+                                      bg='#1e1e1e', fg='#d4d4d4', 
                                       relief='flat', font=('Segoe UI', 10),
-                                      highlightthickness=0, pady=2, padx=0)
+                                      highlightthickness=0, pady=2, padx=0,
+                                      borderwidth=0)
         self.progress_label.grid(row=8, column=0, sticky=tk.W, pady=(4, 0))
         self.progress_label.configure(state='disabled')
         
