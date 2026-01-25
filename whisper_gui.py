@@ -942,8 +942,8 @@ class WhisperGUI:
         # Note: check_gpu_availability() is called by check_whisper_installation() 
         # after confirming Whisper is installed (or after Whisper is installed)
 
-        # Check for updates in background
-        self.check_for_updates()
+        # Check for updates after a delay (let initialization complete first)
+        self.root.after(3000, self.check_for_updates)
 
         # Log startup diagnostics
         self.log_startup_diagnostics()
@@ -1344,6 +1344,7 @@ class WhisperGUI:
         # Model section (row 2) - will be collapsed dynamically if GPU+CUDA detected
         self.model_section = CollapsibleFrame(left_frame, text="Model")
         self.model_section.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
+        self.model_section.collapse()  # Start collapsed
         model_frame = self.model_section.content
         
         ttk.Label(model_frame, text="Model:").grid(row=0, column=0, sticky=tk.W)
@@ -2779,10 +2780,6 @@ else:
                     self.device_info.set("⚠️ GPU check failed")
                     self.use_gpu.set(False)
                     self.log(f"⚠️ GPU check error: {e}")
-            
-            # Collapse Model section if GPU is ready
-            if gpu_ready and hasattr(self, 'model_section'):
-                self.root.after(100, self.model_section.collapse)
             
             # Update model status after GPU check completes
             if hasattr(self, 'model_section'):
