@@ -725,8 +725,8 @@ def generate_smart_srt(result, output_file, max_chars_per_line=40, max_lines=2):
 def merge_short_subtitles(subtitles, min_chars, max_chars):
     """
     Merge subtitles that are too short with their neighbors.
-    Uses word count as primary metric - single words should always be merged.
-    Respects complete sentences (3+ words ending with punctuation).
+    Uses word count as primary metric - subtitles with 1-2 words should always be merged.
+    Also merges subtitles that are fragments (don't end with sentence punctuation and are short).
     """
     if len(subtitles) <= 1:
         return subtitles
@@ -735,20 +735,26 @@ def merge_short_subtitles(subtitles, min_chars, max_chars):
         return len(text.split())
     
     def is_complete_sentence(text):
-        """Check if text is a complete sentence (3+ words, ends with punctuation)"""
+        """Check if text is a complete sentence (ends with proper punctuation)"""
         text = text.strip()
-        words = word_count(text)
-        ends_with_punct = text.endswith(('.', '?', '!'))
-        return words >= 3 and ends_with_punct
+        return text.endswith(('.', '?', '!', '"', "'"))
     
-    def should_merge(text):
-        """Determine if a subtitle should be merged"""
+    def should_merge(text, next_text=None):
+        """Determine if a subtitle should be merged with neighbor"""
         words = word_count(text)
-        # Always merge 1-2 word subtitles, unless it's a complete sentence
+        chars = len(text)
+        
+        # Always merge 1-2 word subtitles
         if words <= 2:
-            return not is_complete_sentence(text)
+            return True
+        
+        # Merge short fragments that don't end sentences (likely orphaned phrases)
+        if words <= 4 and chars < 25 and not is_complete_sentence(text):
+            return True
+        
         return False
     
+    # First pass: merge forward (short subtitle merges with next)
     merged = []
     i = 0
     
@@ -759,7 +765,7 @@ def merge_short_subtitles(subtitles, min_chars, max_chars):
         if should_merge(current['text']):
             merged_successfully = False
             
-            # Try to merge with PREVIOUS subtitle first (usually works better)
+            # Try to merge with PREVIOUS subtitle first (usually better for flow)
             if merged:
                 prev = merged[-1]
                 combined_text = prev['text'] + ' ' + current['text']
@@ -796,7 +802,7 @@ def merge_short_subtitles(subtitles, min_chars, max_chars):
         merged.append(current)
         i += 1
     
-    # Second pass: catch any remaining 1-2 word subtitles
+    # Second pass: catch any remaining short subtitles
     final = []
     for sub in merged:
         if should_merge(sub['text']) and final:
@@ -812,7 +818,24 @@ def merge_short_subtitles(subtitles, min_chars, max_chars):
                 continue
         final.append(sub)
     
-    return final
+    # Third pass: one more check for any stragglers
+    result = []
+    for sub in final:
+        words = word_count(sub['text'])
+        if words <= 2 and result:
+            # Force merge with previous if possible
+            prev = result[-1]
+            combined_text = prev['text'] + ' ' + sub['text']
+            if len(combined_text) <= max_chars + 20:  # Allow slight overflow for orphan prevention
+                result[-1] = {
+                    'start': prev['start'],
+                    'end': sub['end'],
+                    'text': combined_text
+                }
+                continue
+        result.append(sub)
+    
+    return result
 
 
 def enforce_minimum_duration(subtitles, min_duration=1.5, extend_duration=1.5):
