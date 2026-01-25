@@ -643,6 +643,9 @@ def generate_smart_srt(result, output_file, max_chars_per_line=42, max_lines=2):
     # Merge tiny orphaned subtitles (1-4 words) with neighbors
     subtitles = merge_tiny_segments(subtitles, max_subtitle_chars)
     
+    # Extend subtitle duration when there's a gap before next subtitle
+    subtitles = extend_subtitle_duration(subtitles, extend_by=1.2)
+    
     # Write SRT file with balanced lines
     with open(output_file, 'w', encoding='utf-8') as f:
         for i, sub in enumerate(subtitles, 1):
@@ -661,7 +664,42 @@ def generate_smart_srt(result, output_file, max_chars_per_line=42, max_lines=2):
             f.write('\n'.join(lines) + '\n\n')
 
 
-def split_segment_by_words(words_data, seg_start, seg_end, max_chars):
+def extend_subtitle_duration(subtitles, extend_by=1.2):
+    """
+    Extend subtitle end times by up to extend_by seconds when there's a gap
+    before the next subtitle. Does not extend into the next subtitle.
+    
+    Args:
+        subtitles: List of subtitle dicts with 'start', 'end', 'text'
+        extend_by: Maximum seconds to extend (default 1.2)
+    
+    Returns:
+        List of subtitles with extended end times
+    """
+    if not subtitles:
+        return subtitles
+    
+    result = []
+    for i, sub in enumerate(subtitles):
+        new_sub = sub.copy()
+        
+        if i < len(subtitles) - 1:
+            # There's a next subtitle - check the gap
+            next_start = subtitles[i + 1]['start']
+            current_end = sub['end']
+            gap = next_start - current_end
+            
+            if gap > 0:
+                # Extend by the smaller of: extend_by or the gap
+                extension = min(extend_by, gap)
+                new_sub['end'] = current_end + extension
+        else:
+            # Last subtitle - extend by full amount
+            new_sub['end'] = sub['end'] + extend_by
+        
+        result.append(new_sub)
+    
+    return result
     """Split a segment using word-level timestamps."""
     subtitles = []
     current_words = []
