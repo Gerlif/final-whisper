@@ -700,6 +700,9 @@ def extend_subtitle_duration(subtitles, extend_by=1.2):
         result.append(new_sub)
     
     return result
+
+
+def split_segment_by_words(words_data, seg_start, seg_end, max_chars):
     """Split a segment using word-level timestamps."""
     subtitles = []
     current_words = []
