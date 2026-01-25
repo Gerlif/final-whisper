@@ -888,7 +888,7 @@ class WhisperGUI:
         self.video_path = tk.StringVar()
         self.output_dir = tk.StringVar(value=str(Path.home() / "whisper_output"))
         self.language = tk.StringVar(value="da: Danish")
-        self.model = tk.StringVar(value="large")
+        self.model = tk.StringVar(value="turbo")
         self.max_line_count = tk.IntVar(value=2)
         self.use_word_timestamps = tk.BooleanVar(value=True)
         self.max_chars_per_line = tk.IntVar(value=40)
