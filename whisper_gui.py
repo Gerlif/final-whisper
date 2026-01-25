@@ -1943,12 +1943,17 @@ if total > BATCH_SIZE:
                 print(f"OK:{batch_num}", flush=True)
                 break
             except urllib.error.HTTPError as e:
+                error_body = ""
+                try:
+                    error_body = e.read().decode('utf-8')
+                except:
+                    pass
                 if e.code in (429, 529, 503, 502) and attempt < max_retries - 1:
                     wait_time = 30 * (attempt + 1)  # 30s, 60s, 90s
                     print(f"RETRY:{batch_num}:Error {e.code}, waiting {wait_time}s... (attempt {attempt+1}/{max_retries})", flush=True)
                     time.sleep(wait_time)
                 else:
-                    print(f"FAIL:{batch_num}:{e}", flush=True)
+                    print(f"FAIL:{batch_num}:{e} - {error_body[:200]}", flush=True)
                     corrected_blocks.extend(batch_blocks)
                     break
             except Exception as e:
