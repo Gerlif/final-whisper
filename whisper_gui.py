@@ -1697,9 +1697,8 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM Start the updated app
-timeout /t 1 /nobreak >nul
-start "" "{current_exe}"
+echo.
+echo Update complete! You can now open Final Whisper.
 del "%~f0"
 """
 
@@ -1712,9 +1711,8 @@ del "%~f0"
                         messagebox.showinfo(
                             "Update Ready",
                             f"Final Whisper v{self.new_version} has been downloaded!\n\n"
-                            "The application will now close and update.\n"
-                            "It will restart automatically after the update.\n\n"
-                            "Click OK to continue."
+                            "The application will now close and update.\n\n"
+                            "Please reopen Final Whisper after a few seconds."
                         )
                         # Launch update script and exit AFTER user clicks OK
                         subprocess.Popen(['cmd', '/c', batch_path],
