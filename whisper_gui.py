@@ -1467,12 +1467,8 @@ class WhisperGUI:
         self.stop_btn.pack(side=tk.LEFT, expand=True, fill=tk.X)
         
         # Batch file label (shown during processing)
-        self.batch_file_frame = ttk.Frame(left_frame)
-        self.batch_file_frame.grid(row=6, column=0, sticky=tk.W, pady=(8, 6))
-        self.batch_file_icon = ttk.Label(self.batch_file_frame, text="", font=("Segoe UI", 9))
-        self.batch_file_icon.pack(side=tk.LEFT)
-        self.batch_file_name = ttk.Label(self.batch_file_frame, text="", font=("Segoe UI", 9, "bold"))
-        self.batch_file_name.pack(side=tk.LEFT)
+        self.batch_file_label = ttk.Label(left_frame, text="", font=("Segoe UI", 9))
+        self.batch_file_label.grid(row=6, column=0, sticky=tk.W, pady=(8, 6))
         
         # Progress
         self.progress = GradientProgressBar(left_frame)
@@ -1551,7 +1547,7 @@ class WhisperGUI:
                 self.log_text.insert(tk.END, message + "\n", 'warning')
             elif message.startswith('📥') or message.startswith('💡') or message.startswith('🔍') or message.startswith('🎤') or message.startswith('📁') or message.startswith('🎬') or message.startswith('📄'):
                 self.log_text.insert(tk.END, message + "\n", 'info')
-            elif message.startswith('===') or message.startswith('---'):
+            elif message.startswith('===') or message.startswith('---') or (len(message) > 10 and message.strip('=- ') == ''):
                 self.log_text.insert(tk.END, message + "\n", 'header')
             elif message.startswith('  Batch') or message.startswith('Processing in batches'):
                 self.log_text.insert(tk.END, message + "\n", 'dim')
@@ -3635,8 +3631,7 @@ else:
             self.batch_total = 1
             # Show filename for single file
             filename = Path(self.video_path.get()).name
-            self.batch_file_icon.config(text="📄 ")
-            self.batch_file_name.config(text=filename)
+            self.batch_file_label.config(text=f"📄 {filename}")
             
         # Create output directory
         os.makedirs(self.output_dir.get(), exist_ok=True)
@@ -3776,8 +3771,7 @@ else:
                     def reset_for_next_file(idx=i+1, total=self.batch_total, name=file_path.name):
                         self.progress['value'] = 0
                         self.progress.start_animation()
-                        self.batch_file_icon.config(text=f"📄 File {idx}/{total}: ")
-                        self.batch_file_name.config(text=name)
+                        self.batch_file_label.config(text=f"📄 File {idx}/{total}: {name}")
                     self.root.after(0, reset_for_next_file)
                     
                     # Set current file for transcription
@@ -3790,7 +3784,7 @@ else:
                         self._run_transcription_direct_single(str(file_path))
                 
                 # Clear batch label when done
-                self.root.after(0, lambda: (self.batch_file_icon.config(text=""), self.batch_file_name.config(text="")))
+                self.root.after(0, lambda: self.batch_file_label.config(text=""))
                 
                 if not self.stop_requested:
                     self.root.after(0, lambda: self.log(f"\n{'='*60}"))
@@ -3818,8 +3812,7 @@ else:
         self.progress.stop_animation()
         self.process_btn.config(state='normal')
         self.stop_btn.config(state='disabled')
-        self.batch_file_icon.config(text="")  # Clear batch file label
-        self.batch_file_name.config(text="")
+        self.batch_file_label.config(text="")  # Clear batch file label
         
         if was_stopped:
             # User cancelled - reset progress
