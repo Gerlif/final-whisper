@@ -1483,6 +1483,16 @@ class WhisperGUI:
                                                    relief='flat', font=('Consolas', 9), padx=8, pady=8)
         self.log_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
+        # Configure color tags for log
+        self.log_text.tag_configure('success', foreground='#4ec9b0')      # Teal/green for success ✅
+        self.log_text.tag_configure('error', foreground='#f14c4c')        # Red for errors ❌
+        self.log_text.tag_configure('warning', foreground='#cca700')      # Yellow/orange for warnings ⚠️
+        self.log_text.tag_configure('info', foreground='#3794ff')         # Blue for info 📥 💡
+        self.log_text.tag_configure('timestamp', foreground='#9a6dd7')    # Darker purple for timestamps
+        self.log_text.tag_configure('transcript', foreground='#c586c0')   # Lighter purple/pink for transcript text
+        self.log_text.tag_configure('header', foreground='#569cd6')       # Blue for headers/separators
+        self.log_text.tag_configure('dim', foreground='#6a6a6a')          # Dim gray for less important info
+        
         # Configure grid weights
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
@@ -1500,10 +1510,35 @@ class WhisperGUI:
         log_frame.rowconfigure(0, weight=1)
         
     def log(self, message):
-        """Add message to log (thread-safe)"""
+        """Add message to log with color support (thread-safe)"""
         def do_log():
             self.log_text.config(state='normal')
-            self.log_text.insert(tk.END, message + "\n")
+            
+            # Determine color tag based on message content
+            import re
+            
+            # Check for timestamp pattern [MM:SS.mmm --> MM:SS.mmm] text
+            timestamp_match = re.match(r'(\[[\d:.]+ --> [\d:.]+\])(.*)', message)
+            if timestamp_match:
+                # Insert timestamp in darker purple
+                self.log_text.insert(tk.END, timestamp_match.group(1), 'timestamp')
+                # Insert transcript text in lighter purple
+                self.log_text.insert(tk.END, timestamp_match.group(2) + "\n", 'transcript')
+            elif message.startswith('✅') or message.startswith('☑'):
+                self.log_text.insert(tk.END, message + "\n", 'success')
+            elif message.startswith('❌'):
+                self.log_text.insert(tk.END, message + "\n", 'error')
+            elif message.startswith('⚠️') or message.startswith('⚠'):
+                self.log_text.insert(tk.END, message + "\n", 'warning')
+            elif message.startswith('📥') or message.startswith('💡') or message.startswith('🔍') or message.startswith('🎤') or message.startswith('📁') or message.startswith('🎬') or message.startswith('📄'):
+                self.log_text.insert(tk.END, message + "\n", 'info')
+            elif message.startswith('===') or message.startswith('---'):
+                self.log_text.insert(tk.END, message + "\n", 'header')
+            elif message.startswith('  Batch') or message.startswith('Processing in batches'):
+                self.log_text.insert(tk.END, message + "\n", 'dim')
+            else:
+                self.log_text.insert(tk.END, message + "\n")
+            
             self.log_text.see(tk.END)
             self.log_text.config(state='disabled')
         
