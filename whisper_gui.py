@@ -640,6 +640,9 @@ def generate_smart_srt(result, output_file, max_chars_per_line=42, max_lines=2):
     if not subtitles:
         return
     
+    # Merge tiny orphaned subtitles (1-4 words) with neighbors
+    subtitles = merge_tiny_segments(subtitles, max_subtitle_chars)
+    
     # Write SRT file with balanced lines
     with open(output_file, 'w', encoding='utf-8') as f:
         for i, sub in enumerate(subtitles, 1):
@@ -737,8 +740,13 @@ def split_segment_evenly(text, start_time, end_time, max_chars):
 
 def merge_tiny_segments(subtitles, max_chars):
     """
-    Merge only very short segments (1-2 words) with their neighbors.
-    Keeps Whisper's timing mostly intact.
+    Merge short orphaned segments with their neighbors.
+    Preserves word-level timing by using start of first and end of last.
+    
+    Rules:
+    - Merge segments with 1-3 words that don't end sentences
+    - Prefer merging with PREVIOUS (more natural flow)
+    - Do multiple passes until no more merges possible
     """
     if len(subtitles) <= 1:
         return subtitles
@@ -746,45 +754,70 @@ def merge_tiny_segments(subtitles, max_chars):
     def word_count(text):
         return len(text.split())
     
-    merged = []
-    i = 0
+    def is_sentence_end(text):
+        return text.strip().endswith(('.', '?', '!', '"'))
     
-    while i < len(subtitles):
-        current = subtitles[i]
-        words = word_count(current['text'])
+    def should_merge(text):
+        """Check if this subtitle should be merged with a neighbor"""
+        words = word_count(text)
+        # Merge if 1-3 words and doesn't end a sentence
+        if words <= 3 and not is_sentence_end(text):
+            return True
+        # Also merge single words even if they end sentences (like "standards.")
+        if words == 1:
+            return True
+        return False
+    
+    # Multiple passes to catch chains of short segments
+    for _ in range(3):
+        merged = []
+        i = 0
+        changes_made = False
         
-        # Only merge if 1-2 words AND doesn't end with sentence punctuation
-        if words <= 2 and not current['text'].strip().endswith(('.', '?', '!')):
-            # Try to merge with previous
-            if merged:
-                prev = merged[-1]
-                combined = prev['text'] + ' ' + current['text']
-                if len(combined) <= max_chars:
-                    merged[-1] = {
-                        'start': prev['start'],
-                        'end': current['end'],
-                        'text': combined
-                    }
-                    i += 1
-                    continue
+        while i < len(subtitles):
+            current = subtitles[i]
             
-            # Try to merge with next
-            if i + 1 < len(subtitles):
-                next_sub = subtitles[i + 1]
-                combined = current['text'] + ' ' + next_sub['text']
-                if len(combined) <= max_chars:
-                    merged.append({
-                        'start': current['start'],
-                        'end': next_sub['end'],
-                        'text': combined
-                    })
-                    i += 2
-                    continue
+            if should_merge(current['text']):
+                merged_successfully = False
+                
+                # Try to merge with PREVIOUS first (better for natural flow)
+                if merged:
+                    prev = merged[-1]
+                    combined = prev['text'] + ' ' + current['text']
+                    if len(combined) <= max_chars:
+                        merged[-1] = {
+                            'start': prev['start'],
+                            'end': current['end'],  # Use end time of current
+                            'text': combined
+                        }
+                        i += 1
+                        changes_made = True
+                        continue
+                
+                # Try to merge with NEXT
+                if i + 1 < len(subtitles):
+                    next_sub = subtitles[i + 1]
+                    combined = current['text'] + ' ' + next_sub['text']
+                    if len(combined) <= max_chars:
+                        merged.append({
+                            'start': current['start'],  # Use start time of current
+                            'end': next_sub['end'],
+                            'text': combined
+                        })
+                        i += 2
+                        changes_made = True
+                        continue
+            
+            merged.append(current)
+            i += 1
         
-        merged.append(current)
-        i += 1
+        subtitles = merged
+        
+        # Stop if no changes were made
+        if not changes_made:
+            break
     
-    return merged
+    return subtitles
 
 
 class WhisperGUI:
