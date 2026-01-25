@@ -1466,12 +1466,30 @@ class WhisperGUI:
                                    command=self.stop_transcription, state='disabled')
         self.stop_btn.pack(side=tk.LEFT, expand=True, fill=tk.X)
         
+        # Batch file label (shown during processing)
+        self.batch_file_frame = ttk.Frame(left_frame)
+        self.batch_file_frame.grid(row=6, column=0, sticky=tk.W, pady=(0, 2))
+        self.batch_file_icon = ttk.Label(self.batch_file_frame, text="", font=("Segoe UI", 9))
+        self.batch_file_icon.pack(side=tk.LEFT)
+        self.batch_file_name = ttk.Label(self.batch_file_frame, text="", font=("Segoe UI", 9, "bold"))
+        self.batch_file_name.pack(side=tk.LEFT)
+        
         # Progress
         self.progress = GradientProgressBar(left_frame)
-        self.progress.grid(row=6, column=0, sticky=(tk.W, tk.E), pady=(0, 4))
+        self.progress.grid(row=7, column=0, sticky=(tk.W, tk.E), pady=(0, 4))
         
-        self.progress_label = ttk.Label(left_frame, text="", font=("Segoe UI", 10))
-        self.progress_label.grid(row=7, column=0, sticky=tk.W, pady=(4, 0))
+        # Progress label as Text widget for colored segments
+        self.progress_label = tk.Text(left_frame, height=1, width=70, 
+                                      bg='#2b2b2b', fg='#d4d4d4', 
+                                      relief='flat', font=('Segoe UI', 10),
+                                      highlightthickness=0, pady=2, padx=0)
+        self.progress_label.grid(row=8, column=0, sticky=tk.W, pady=(4, 0))
+        self.progress_label.configure(state='disabled')
+        
+        # Configure tags for progress label colors
+        self.progress_label.tag_configure('normal', foreground='#d4d4d4')
+        self.progress_label.tag_configure('separator', foreground='#6a4c93')  # Dark purple separators
+        self.progress_label.tag_configure('dim', foreground='#888888')
         
         # Output log (right side)
         log_frame = ttk.LabelFrame(right_frame, text="  Output Log  ", padding="12")
@@ -1549,6 +1567,24 @@ class WhisperGUI:
         except:
             # Fallback if something goes wrong
             pass
+    
+    def set_progress_text(self, text):
+        """Set progress label text with colored separators"""
+        self.progress_label.configure(state='normal')
+        self.progress_label.delete('1.0', tk.END)
+        
+        # Split by | separator and add with colors
+        parts = text.split(' | ')
+        for i, part in enumerate(parts):
+            if i > 0:
+                self.progress_label.insert(tk.END, '  |  ', 'separator')
+            self.progress_label.insert(tk.END, part, 'normal')
+        
+        self.progress_label.configure(state='disabled')
+    
+    def get_progress_text(self):
+        """Get current progress label text"""
+        return self.progress_label.get('1.0', tk.END).strip()
     
     def update_features_display(self):
         """Update the features label based on smart formatting checkbox"""
@@ -2028,7 +2064,7 @@ if total > BATCH_SIZE:
         batch_blocks = subtitle_blocks[batch_start:batch_end]
         batch_content = '\\n\\n'.join(batch_blocks)
         
-        # Retry logic for rate limits
+        # Retry logic for rate limits and overload errors
         max_retries = 3
         for attempt in range(max_retries):
             try:
@@ -2038,9 +2074,9 @@ if total > BATCH_SIZE:
                 print(f"OK:{batch_num}", flush=True)
                 break
             except urllib.error.HTTPError as e:
-                if e.code == 429 and attempt < max_retries - 1:
+                if e.code in (429, 529, 503, 502) and attempt < max_retries - 1:
                     wait_time = 30 * (attempt + 1)  # 30s, 60s, 90s
-                    print(f"RATE_LIMIT:{batch_num}:Waiting {wait_time}s...", flush=True)
+                    print(f"RETRY:{batch_num}:Error {e.code}, waiting {wait_time}s... (attempt {attempt+1}/{max_retries})", flush=True)
                     time.sleep(wait_time)
                 else:
                     print(f"FAIL:{batch_num}:{e}", flush=True)
@@ -2105,24 +2141,37 @@ print("DONE", flush=True)
                     self.log(line)
                 elif line.startswith('BATCH:'):
                     parts = line[6:].split('/')
-                    batch_num, total_batches = parts[0], parts[1]
+                    batch_num, total_batches = int(parts[0]), int(parts[1])
                     self._proofreading_batch_info = f"Batch {batch_num}/{total_batches}"
+                    self._proofreading_total_batches = total_batches
                     self.log(f"  Batch {batch_num}/{total_batches}...")
-                elif line.startswith('RATE_LIMIT:'):
-                    # Rate limit hit, waiting
-                    parts = line[11:].split(':', 1)
+                elif line.startswith('RETRY:'):
+                    # Retrying due to error (429, 529, 503, etc.)
+                    parts = line[6:].split(':', 1)
                     batch_num = parts[0]
-                    message = parts[1] if len(parts) > 1 else "Waiting..."
-                    self._proofreading_batch_info = f"Batch {batch_num} - Rate limited, {message}"
-                    self.log(f"  ⏳ Batch {batch_num}: Rate limited, {message}")
+                    message = parts[1] if len(parts) > 1 else "Retrying..."
+                    self._proofreading_batch_info = f"Batch {batch_num} - {message}"
+                    self.log(f"  ⏳ Batch {batch_num}: {message}")
                 elif line.startswith('OK:'):
-                    pass  # Batch succeeded
+                    # Batch succeeded - update progress bar
+                    batch_num = int(line[3:])
+                    total_batches = getattr(self, '_proofreading_total_batches', 1)
+                    # Progress goes from 85% to 100% during proofreading
+                    progress_per_batch = 15 / total_batches
+                    new_progress = 85 + (batch_num * progress_per_batch)
+                    self.root.after(0, lambda p=new_progress: self.progress.set_value(min(p, 100)))
                 elif line.startswith('FAIL:'):
+                    # Batch failed - still update progress
                     parts = line[5:].split(':', 1)
-                    batch_num = parts[0]
+                    batch_num = int(parts[0])
                     error = parts[1] if len(parts) > 1 else "Unknown error"
+                    total_batches = getattr(self, '_proofreading_total_batches', 1)
+                    progress_per_batch = 15 / total_batches
+                    new_progress = 85 + (batch_num * progress_per_batch)
+                    self.root.after(0, lambda p=new_progress: self.progress.set_value(min(p, 100)))
                     self.log(f"  ⚠️ Batch {batch_num} failed: {error}")
                 elif line == 'DONE':
+                    self.root.after(0, lambda: self.progress.set_value(100))
                     self.log("✅ Proofreading complete!")
             
             process.wait()
@@ -3583,6 +3632,10 @@ else:
             self.batch_files = None
             self.batch_index = 0
             self.batch_total = 1
+            # Show filename for single file
+            filename = Path(self.video_path.get()).name
+            self.batch_file_icon.config(text="📄 ")
+            self.batch_file_name.config(text=filename)
             
         # Create output directory
         os.makedirs(self.output_dir.get(), exist_ok=True)
@@ -3593,7 +3646,7 @@ else:
         self.stop_btn.config(state='normal')
         self.progress['value'] = 0
         self.progress.start_animation()  # Start gradient animation
-        self.progress_label.config(text="Starting...")
+        self.set_progress_text("Starting...")
         
         # Start timer
         import time
@@ -3613,7 +3666,7 @@ else:
         if self.processing:
             self.stop_requested = True
             self.stop_btn.config(state='disabled')
-            self.progress_label.config(text="Stopping...")
+            self.set_progress_text("Stopping...")
             self.log("\n⚠️ Stop requested - cancelling transcription...")
             
             # Also terminate the subprocess if it's running
@@ -3646,7 +3699,7 @@ else:
             return
         
         # Don't overwrite the "Done" message
-        current_text = self.progress_label.cget('text')
+        current_text = self.get_progress_text()
         if '✓ Done' in current_text or 'Cancelled' in current_text:
             self.timer_running = False
             return
@@ -3665,13 +3718,13 @@ else:
         if getattr(self, '_proofreading_mode', False):
             batch_info = getattr(self, '_proofreading_batch_info', None)
             if batch_info:
-                self.progress_label.config(text=f"AI Proofreading... {batch_info} | Elapsed: {elapsed_min}:{elapsed_sec:02d}")
+                self.set_progress_text(f"AI Proofreading... {batch_info} | Elapsed: {elapsed_min}:{elapsed_sec:02d}")
             else:
-                self.progress_label.config(text=f"AI Proofreading... | Elapsed: {elapsed_min}:{elapsed_sec:02d}")
+                self.set_progress_text(f"AI Proofreading... | Elapsed: {elapsed_min}:{elapsed_sec:02d}")
             return
         
         # If we have ETA/Speed info, update the whole string with new elapsed time
-        if ' | ETA:' in current_text and ' | Speed:' in current_text:
+        if 'ETA:' in current_text and 'Speed:' in current_text:
             # Parse and rebuild the detailed progress string
             try:
                 import re
@@ -3681,15 +3734,15 @@ else:
                     base = match.group(1)
                     eta = match.group(2)
                     speed = match.group(3)
-                    self.progress_label.config(text=f"{base} | Elapsed: {elapsed_min}:{elapsed_sec:02d} | ETA: {eta} | Speed: {speed}")
+                    self.set_progress_text(f"{base} | Elapsed: {elapsed_min}:{elapsed_sec:02d} | ETA: {eta} | Speed: {speed}")
                     return
             except:
                 pass
         
         # Simple format - just update elapsed time
-        if ' | Elapsed:' in current_text:
-            base_text = current_text.split(' | Elapsed:')[0]
-            self.progress_label.config(text=f"{base_text} | Elapsed: {elapsed_min}:{elapsed_sec:02d}")
+        if 'Elapsed:' in current_text:
+            base_text = current_text.split('  |  ')[0]  # Split on colored separator
+            self.set_progress_text(f"{base_text} | Elapsed: {elapsed_min}:{elapsed_sec:02d}")
     
     def update_progress_with_time(self, value, status_text):
         """Update progress bar and label with elapsed time"""
@@ -3700,9 +3753,9 @@ else:
             elapsed = time.time() - self.transcription_start_time
             minutes = int(elapsed // 60)
             seconds = int(elapsed % 60)
-            self.progress_label.config(text=f"{status_text} | Elapsed: {minutes}:{seconds:02d}")
+            self.set_progress_text(f"{status_text} | Elapsed: {minutes}:{seconds:02d}")
         else:
-            self.progress_label.config(text=status_text)
+            self.set_progress_text(status_text)
         
     def run_transcription(self):
         """Run the actual transcription"""
@@ -3718,6 +3771,14 @@ else:
                     self.root.after(0, lambda idx=i+1, total=self.batch_total, name=file_path.name: 
                                    self.log(f"\n📄 Processing file {idx}/{total}: {name}"))
                     
+                    # Reset progress and update batch file label
+                    def reset_for_next_file(idx=i+1, total=self.batch_total, name=file_path.name):
+                        self.progress['value'] = 0
+                        self.progress.start_animation()
+                        self.batch_file_icon.config(text=f"📄 File {idx}/{total}: ")
+                        self.batch_file_name.config(text=name)
+                    self.root.after(0, reset_for_next_file)
+                    
                     # Set current file for transcription
                     self._current_batch_file = str(file_path)
                     
@@ -3726,6 +3787,9 @@ else:
                         self._run_transcription_subprocess_single(str(file_path))
                     else:
                         self._run_transcription_direct_single(str(file_path))
+                
+                # Clear batch label when done
+                self.root.after(0, lambda: (self.batch_file_icon.config(text=""), self.batch_file_name.config(text="")))
                 
                 if not self.stop_requested:
                     self.root.after(0, lambda: self.log(f"\n{'='*60}"))
@@ -3753,16 +3817,18 @@ else:
         self.progress.stop_animation()
         self.process_btn.config(state='normal')
         self.stop_btn.config(state='disabled')
+        self.batch_file_icon.config(text="")  # Clear batch file label
+        self.batch_file_name.config(text="")
         
         if was_stopped:
             # User cancelled - reset progress
             self.progress['value'] = 0
-            self.progress_label.config(text="Cancelled")
+            self.set_progress_text("Cancelled")
             self.log("❌ Transcription cancelled")
         elif self.progress['value'] < 100:
             # Didn't complete successfully - reset
             self.progress['value'] = 0
-            self.progress_label.config(text="")
+            self.set_progress_text("")
     
     def _run_transcription_subprocess(self):
         """Run transcription via subprocess (for frozen EXE) - single file from UI"""
@@ -3781,8 +3847,8 @@ else:
         batch_prefix = ""
         if self.batch_files:
             batch_prefix = f"[{self.batch_index}/{self.batch_total}] "
-            self.root.after(0, lambda: self.progress_label.config(
-                text=f"File {self.batch_index}/{self.batch_total}: {Path(video_file).name[:30]}..."))
+            self.root.after(0, lambda: self.set_progress_text(
+                f"File {self.batch_index}/{self.batch_total}: {Path(video_file).name[:30]}..."))
         
         self.log(f"\n{'='*60}")
         self.log(f"{batch_prefix}Starting transcription of: {os.path.basename(video_file)}")
@@ -4084,7 +4150,7 @@ print("DONE", flush=True)
                                 
                                 def update_ui(p=progress, t=progress_text):
                                     self.progress['value'] = p
-                                    self.progress_label.config(text=t)
+                                    self.set_progress_text(t)
                                 self.root.after(0, update_ui)
                                 
                                 # Set timestamp so timer doesn't overwrite
@@ -4213,9 +4279,9 @@ print("DONE", flush=True)
             total_time = time.time() - self.transcription_start_time
             minutes = int(total_time // 60)
             seconds = int(total_time % 60)
-            self.progress_label.config(text=f"✓ Done in {minutes}:{seconds:02d}")
+            self.set_progress_text(f"✓ Done in {minutes}:{seconds:02d}")
         else:
-            self.progress_label.config(text="✓ Done")
+            self.set_progress_text("✓ Done")
         
         self.log(f"\n📁 Output saved to: {output_dir}")
         if proofread_file:
@@ -4467,7 +4533,7 @@ print("DONE", flush=True)
                 
             except KeyboardInterrupt:
                 self.log("\n❌ Transcription cancelled by user")
-                self.progress_label.config(text="Cancelled")
+                self.set_progress_text("Cancelled")
                 messagebox.showinfo("Cancelled", "Transcription was cancelled.")
                 return
             finally:
@@ -4476,7 +4542,7 @@ print("DONE", flush=True)
             
             if self.stop_requested:
                 self.log("\n❌ Transcription cancelled")
-                self.progress_label.config(text="Cancelled")
+                self.set_progress_text("Cancelled")
                 return
             
             self.progress['value'] = 90
@@ -4527,7 +4593,7 @@ print("DONE", flush=True)
                     # Set proofreading mode for progress label
                     self._proofreading_mode = True
                     self.progress['value'] = 95
-                    self.progress_label.config(text="AI Proofreading...")
+                    self.set_progress_text("AI Proofreading...")
                     
                     proofread_file = self.proofread_srt_with_ai(
                         str(srt_file), 
@@ -4547,9 +4613,9 @@ print("DONE", flush=True)
                     total_time = time.time() - self.transcription_start_time
                     minutes = int(total_time // 60)
                     seconds = int(total_time % 60)
-                    self.progress_label.config(text=f"✓ Done in {minutes}:{seconds:02d}")
+                    self.set_progress_text(f"✓ Done in {minutes}:{seconds:02d}")
                 else:
-                    self.progress_label.config(text="✓ Done")
+                    self.set_progress_text("✓ Done")
                 
                 # Log output info
                 self.log(f"\n📁 Output saved to: {output_dir}")
@@ -4562,7 +4628,7 @@ print("DONE", flush=True)
                 self.play_completion_chime()
             else:
                 self.progress['value'] = 100
-                self.progress_label.config(text="Complete (file not found)")
+                self.set_progress_text("Complete (file not found)")
                 self.log("⚠️ SRT file not found at expected location")
                 
         except ImportError:
@@ -4589,7 +4655,7 @@ print("DONE", flush=True)
                 # Keep progress at 100% if completed, otherwise reset
                 if self.progress['value'] < 100:
                     self.progress['value'] = 0
-                    self.progress_label.config(text="")
+                    self.set_progress_text("")
                 else:
                     # Show final elapsed time
                     if self.transcription_start_time:
@@ -4597,9 +4663,9 @@ print("DONE", flush=True)
                         total_time = time.time() - self.transcription_start_time
                         minutes = int(total_time // 60)
                         seconds = int(total_time % 60)
-                        current_text = self.progress_label.cget('text')
+                        current_text = self.get_progress_text()
                         if 'Done' in current_text or 'Complete' in current_text:
-                            self.progress_label.config(text=f"✓ Done in {minutes}:{seconds:02d}")
+                            self.set_progress_text(f"✓ Done in {minutes}:{seconds:02d}")
     
     def on_closing(self):
         """Handle window close - save settings"""
