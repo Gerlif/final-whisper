@@ -921,6 +921,7 @@ class WhisperGUI:
         self.last_audio_position = None
         self.last_audio_duration = None
         self.transcription_process = None  # For subprocess transcription
+        self.selected_files = None  # For batch processing multiple files
         
         # Anti-hallucination settings
         self.condition_on_previous_text = tk.BooleanVar(value=True)  # Default True (Whisper default)
@@ -1304,9 +1305,14 @@ class WhisperGUI:
         self.files_section.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
         file_frame = self.files_section.content
         
-        ttk.Label(file_frame, text="Video File:").grid(row=0, column=0, sticky=tk.W)
+        ttk.Label(file_frame, text="Input:").grid(row=0, column=0, sticky=tk.W)
         ttk.Entry(file_frame, textvariable=self.video_path, width=38).grid(row=0, column=1, padx=8)
-        ttk.Button(file_frame, text="Browse", command=self.browse_video).grid(row=0, column=2)
+        
+        # Button frame for file/folder selection
+        btn_frame = ttk.Frame(file_frame)
+        btn_frame.grid(row=0, column=2)
+        ttk.Button(btn_frame, text="File(s)", command=self.browse_video).pack(side=tk.LEFT)
+        ttk.Button(btn_frame, text="Folder", command=self.browse_input_folder).pack(side=tk.LEFT, padx=(4, 0))
         
         ttk.Label(file_frame, text="Output Folder:").grid(row=1, column=0, sticky=tk.W, pady=(8,0))
         ttk.Entry(file_frame, textvariable=self.output_dir, width=38).grid(row=1, column=1, padx=8, pady=(8,0))
@@ -3459,39 +3465,89 @@ else:
                 "GPU acceleration requires an NVIDIA graphics card with CUDA support.")
         
     def browse_video(self):
-        """Browse for video file"""
-        filename = filedialog.askopenfilename(
-            title="Select Video File",
+        """Browse for video file(s) - supports multiple selection"""
+        filenames = filedialog.askopenfilenames(
+            title="Select Video/Audio File(s)",
             filetypes=[
                 ("Video files", "*.mp4 *.mkv *.avi *.mov *.m4v *.webm *.mp3 *.wav *.m4a *.flac *.ogg"),
                 ("All files", "*.*")
             ]
         )
-        if filename:
-            self.video_path.set(filename)
-            # Set output folder to same directory as input file
-            input_dir = str(Path(filename).parent)
-            self.output_dir.set(input_dir)
+        if filenames:
+            if len(filenames) == 1:
+                # Single file
+                self.video_path.set(filenames[0])
+                self.selected_files = None  # Clear batch list
+                input_dir = str(Path(filenames[0]).parent)
+                self.output_dir.set(input_dir)
+            else:
+                # Multiple files
+                self.selected_files = list(filenames)
+                self.video_path.set(f"{len(filenames)} files selected")
+                # Set output folder to same directory as first file
+                input_dir = str(Path(filenames[0]).parent)
+                self.output_dir.set(input_dir)
+                self.log(f"📁 Selected {len(filenames)} files for batch processing")
+    
+    def browse_input_folder(self):
+        """Browse for input folder (batch mode)"""
+        dirname = filedialog.askdirectory(title="Select Folder with Video/Audio Files")
+        if dirname:
+            # Get video files in folder
+            video_extensions = {'.mp4', '.mkv', '.avi', '.mov', '.m4v', '.webm', '.mp3', '.wav', '.m4a', '.flac', '.ogg'}
+            files = sorted([f for f in Path(dirname).iterdir() if f.suffix.lower() in video_extensions])
+            
+            if files:
+                self.selected_files = [str(f) for f in files]
+                self.video_path.set(f"{len(files)} files in folder")
+                self.output_dir.set(dirname)
+                self.log(f"📁 Found {len(files)} video/audio files in folder")
+            else:
+                self.video_path.set(dirname)
+                self.selected_files = None
+                self.output_dir.set(dirname)
+                self.log("⚠️ No video/audio files found in folder")
             
     def browse_output(self):
         """Browse for output directory"""
         dirname = filedialog.askdirectory(title="Select Output Folder")
         if dirname:
             self.output_dir.set(dirname)
+    
+    def get_batch_files(self):
+        """Get list of files to process"""
+        if hasattr(self, 'selected_files') and self.selected_files:
+            return [Path(f) for f in self.selected_files]
+        return []
             
     def start_transcription(self):
         """Start the transcription process"""
         if self.processing:
             messagebox.showwarning("Processing", "A transcription is already in progress")
             return
-            
-        if not self.video_path.get():
-            messagebox.showerror("Error", "Please select a video file")
-            return
-            
-        if not os.path.exists(self.video_path.get()):
-            messagebox.showerror("Error", "Video file does not exist")
-            return
+        
+        # Check if we have multiple files selected
+        batch_files = self.get_batch_files()
+        
+        if batch_files:
+            # Batch mode - multiple files or folder
+            self.batch_files = batch_files
+            self.batch_index = 0
+            self.batch_total = len(batch_files)
+            self.log(f"\n{'='*60}")
+            self.log(f"🎬 Batch Mode: {self.batch_total} files to process")
+            self.log(f"{'='*60}\n")
+        else:
+            # Single file validation
+            if not self.video_path.get():
+                messagebox.showerror("Error", "Please select a video file")
+                return
+            if not os.path.exists(self.video_path.get()):
+                messagebox.showerror("Error", "Video file does not exist")
+                return
+            self.batch_files = None
+            self.batch_index = 0
+            self.batch_total = 1
             
         # Create output directory
         os.makedirs(self.output_dir.get(), exist_ok=True)
@@ -3616,14 +3672,38 @@ else:
     def run_transcription(self):
         """Run the actual transcription"""
         try:
-            # For frozen EXE, run whisper via subprocess to avoid Python version conflicts
-            if getattr(sys, 'frozen', False):
-                self._run_transcription_subprocess()
+            # Batch mode - process multiple files
+            if self.batch_files:
+                for i, file_path in enumerate(self.batch_files):
+                    if self.stop_requested:
+                        self.root.after(0, lambda: self.log(f"\n❌ Batch processing stopped ({i}/{self.batch_total} completed)"))
+                        break
+                    
+                    self.batch_index = i + 1
+                    self.root.after(0, lambda idx=i+1, total=self.batch_total, name=file_path.name: 
+                                   self.log(f"\n📄 Processing file {idx}/{total}: {name}"))
+                    
+                    # Set current file for transcription
+                    self._current_batch_file = str(file_path)
+                    
+                    # For frozen EXE, run whisper via subprocess
+                    if getattr(sys, 'frozen', False):
+                        self._run_transcription_subprocess_single(str(file_path))
+                    else:
+                        self._run_transcription_direct_single(str(file_path))
+                
+                if not self.stop_requested:
+                    self.root.after(0, lambda: self.log(f"\n{'='*60}"))
+                    self.root.after(0, lambda: self.log(f"✅ Batch complete! {self.batch_total} files processed"))
+                    self.root.after(0, lambda: self.log(f"{'='*60}"))
             else:
-                self._run_transcription_direct()
+                # Single file mode
+                if getattr(sys, 'frozen', False):
+                    self._run_transcription_subprocess()
+                else:
+                    self._run_transcription_direct()
         finally:
-            # Always reset buttons when done (for subprocess mode)
-            # Direct mode has its own finally block
+            # Always reset buttons when done
             if getattr(sys, 'frozen', False):
                 self.root.after(0, self._reset_ui_after_transcription)
     
@@ -3650,16 +3730,27 @@ else:
             self.progress_label.config(text="")
     
     def _run_transcription_subprocess(self):
-        """Run transcription via subprocess (for frozen EXE)"""
+        """Run transcription via subprocess (for frozen EXE) - single file from UI"""
         video_file = self.video_path.get()
+        self._run_transcription_subprocess_single(video_file)
+    
+    def _run_transcription_subprocess_single(self, video_file):
+        """Run transcription via subprocess for a single file"""
         output_dir = self.output_dir.get()
         
         if self.stop_requested:
             self.log("❌ Transcription cancelled before starting")
             return
         
+        # Show batch progress if in batch mode
+        batch_prefix = ""
+        if self.batch_files:
+            batch_prefix = f"[{self.batch_index}/{self.batch_total}] "
+            self.root.after(0, lambda: self.progress_label.config(
+                text=f"File {self.batch_index}/{self.batch_total}: {Path(video_file).name[:30]}..."))
+        
         self.log(f"\n{'='*60}")
-        self.log(f"Starting transcription of: {os.path.basename(video_file)}")
+        self.log(f"{batch_prefix}Starting transcription of: {os.path.basename(video_file)}")
         self.log(f"Model: {self.model.get()}")
         self.log(f"Language: {self.language.get()}")
         device = "cuda" if self.use_gpu.get() else "cpu"
@@ -4107,11 +4198,15 @@ print("DONE", flush=True)
         return f"{hours:02d}:{minutes:02d}:{secs:06.3f}".replace('.', ',')
     
     def _run_transcription_direct(self):
-        """Run transcription directly (for running as script)"""
+        """Run transcription directly (for running as script) - single file from UI"""
+        video_file = self.video_path.get()
+        self._run_transcription_direct_single(video_file)
+    
+    def _run_transcription_direct_single(self, video_file):
+        """Run transcription directly for a single file"""
         try:
             import whisper
             
-            video_file = self.video_path.get()
             output_dir = self.output_dir.get()
             
             if self.stop_requested:
