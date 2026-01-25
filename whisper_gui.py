@@ -1332,16 +1332,55 @@ class WhisperGUI:
         
         ttk.Label(settings_frame, text="Context/Prompt:").grid(row=1, column=0, sticky=(tk.W, tk.N), pady=(8,0))
         
+        # Context frame to hold both single and multi-file modes
+        self.context_frame = ttk.Frame(settings_frame)
+        self.context_frame.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=8, pady=(8,0))
+        self.context_frame.columnconfigure(0, weight=1)
+        
         # Create context entry with dark theme colors - full width and taller
-        self.context_entry = tk.Text(settings_frame, height=5, wrap=tk.WORD,
+        self.context_entry = tk.Text(self.context_frame, height=5, wrap=tk.WORD,
                                      bg='#3c3c3c', fg='#ffffff', insertbackground='#ffffff',
                                      relief='flat', font=('Segoe UI', 9), padx=6, pady=6)
-        self.context_entry.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=8, pady=(8,0))
+        self.context_entry.grid(row=0, column=0, sticky=(tk.W, tk.E))
         
         # Bind text widget to variable
         def update_context(*args):
             self.context_prompt.set(self.context_entry.get("1.0", tk.END).strip())
+            # Also update per-file prompt if in batch mode
+            if hasattr(self, '_batch_prompts') and self._batch_prompts and hasattr(self, '_current_prompt_index'):
+                self._batch_prompts[self._current_prompt_index] = self.context_entry.get("1.0", tk.END).strip()
         self.context_entry.bind("<KeyRelease>", update_context)
+        
+        # Batch context controls (hidden by default)
+        self.batch_context_frame = ttk.Frame(self.context_frame)
+        # Will be shown when multiple files selected
+        
+        # Navigation frame with arrows and file indicator
+        self.batch_nav_frame = ttk.Frame(self.batch_context_frame)
+        self.batch_nav_frame.pack(fill=tk.X, pady=(6, 0))
+        
+        self.prev_file_btn = ttk.Button(self.batch_nav_frame, text="◀", width=3, command=self._prev_batch_file)
+        self.prev_file_btn.pack(side=tk.LEFT)
+        
+        self.batch_file_indicator = ttk.Label(self.batch_nav_frame, text="File 1/3: filename.mp4", font=("Segoe UI", 9))
+        self.batch_file_indicator.pack(side=tk.LEFT, padx=8, expand=True)
+        
+        self.next_file_btn = ttk.Button(self.batch_nav_frame, text="▶", width=3, command=self._next_batch_file)
+        self.next_file_btn.pack(side=tk.LEFT)
+        
+        # Same prompt for all checkbox
+        self.use_same_prompt = tk.BooleanVar(value=True)
+        self.same_prompt_check = ttk.Checkbutton(
+            self.batch_context_frame, 
+            text="Use same prompt for all files",
+            variable=self.use_same_prompt,
+            command=self._toggle_same_prompt
+        )
+        self.same_prompt_check.pack(anchor=tk.W, pady=(4, 0))
+        
+        # Initialize batch prompt storage
+        self._batch_prompts = []
+        self._current_prompt_index = 0
         
         hint_label = ttk.Label(settings_frame, text="Names, terms, companies to help recognition...", 
                  font=("Segoe UI", 8))
@@ -3561,6 +3600,7 @@ else:
                 self.selected_files = None  # Clear batch list
                 input_dir = str(Path(filenames[0]).parent)
                 self.output_dir.set(input_dir)
+                self._hide_batch_context_controls()
             else:
                 # Multiple files
                 self.selected_files = list(filenames)
@@ -3569,6 +3609,7 @@ else:
                 input_dir = str(Path(filenames[0]).parent)
                 self.output_dir.set(input_dir)
                 self.log(f"📁 Selected {len(filenames)} files for batch processing")
+                self._show_batch_context_controls()
     
     def browse_input_folder(self):
         """Browse for input folder (batch mode)"""
@@ -3583,17 +3624,113 @@ else:
                 self.video_path.set(f"{len(files)} files in folder")
                 self.output_dir.set(dirname)
                 self.log(f"📁 Found {len(files)} video/audio files in folder")
+                self._show_batch_context_controls()
             else:
                 self.video_path.set(dirname)
                 self.selected_files = None
                 self.output_dir.set(dirname)
                 self.log("⚠️ No video/audio files found in folder")
+                self._hide_batch_context_controls()
             
     def browse_output(self):
         """Browse for output directory"""
         dirname = filedialog.askdirectory(title="Select Output Folder")
         if dirname:
             self.output_dir.set(dirname)
+    
+    def _show_batch_context_controls(self):
+        """Show the batch context controls when multiple files selected"""
+        if not self.selected_files:
+            return
+        
+        # Initialize prompts for each file (copy current prompt to all)
+        current_prompt = self.context_entry.get("1.0", tk.END).strip()
+        self._batch_prompts = [current_prompt] * len(self.selected_files)
+        self._current_prompt_index = 0
+        
+        # Show the batch controls
+        self.batch_context_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(4, 0))
+        
+        # Update the file indicator
+        self._update_batch_file_indicator()
+    
+    def _hide_batch_context_controls(self):
+        """Hide the batch context controls"""
+        self.batch_context_frame.grid_forget()
+        self._batch_prompts = []
+        self._current_prompt_index = 0
+    
+    def _update_batch_file_indicator(self):
+        """Update the file indicator label"""
+        if not self.selected_files:
+            return
+        
+        idx = self._current_prompt_index
+        total = len(self.selected_files)
+        filename = Path(self.selected_files[idx]).name
+        
+        # Truncate filename if too long
+        if len(filename) > 35:
+            filename = filename[:32] + "..."
+        
+        self.batch_file_indicator.config(text=f"File {idx + 1}/{total}: {filename}")
+        
+        # Update button states
+        self.prev_file_btn.config(state='normal' if idx > 0 else 'disabled')
+        self.next_file_btn.config(state='normal' if idx < total - 1 else 'disabled')
+    
+    def _prev_batch_file(self):
+        """Navigate to previous file's prompt"""
+        if self._current_prompt_index > 0:
+            # Save current prompt
+            self._batch_prompts[self._current_prompt_index] = self.context_entry.get("1.0", tk.END).strip()
+            
+            # Move to previous
+            self._current_prompt_index -= 1
+            
+            # Load prompt for this file
+            self.context_entry.delete("1.0", tk.END)
+            self.context_entry.insert("1.0", self._batch_prompts[self._current_prompt_index])
+            
+            self._update_batch_file_indicator()
+    
+    def _next_batch_file(self):
+        """Navigate to next file's prompt"""
+        if self._current_prompt_index < len(self.selected_files) - 1:
+            # Save current prompt
+            self._batch_prompts[self._current_prompt_index] = self.context_entry.get("1.0", tk.END).strip()
+            
+            # Move to next
+            self._current_prompt_index += 1
+            
+            # Load prompt for this file
+            self.context_entry.delete("1.0", tk.END)
+            self.context_entry.insert("1.0", self._batch_prompts[self._current_prompt_index])
+            
+            self._update_batch_file_indicator()
+    
+    def _toggle_same_prompt(self):
+        """Toggle between same prompt for all files or individual prompts"""
+        if self.use_same_prompt.get():
+            # Copy current prompt to all files
+            current_prompt = self.context_entry.get("1.0", tk.END).strip()
+            self._batch_prompts = [current_prompt] * len(self.selected_files)
+            # Disable navigation
+            self.prev_file_btn.config(state='disabled')
+            self.next_file_btn.config(state='disabled')
+            self.batch_file_indicator.config(text="Same prompt for all files")
+        else:
+            # Re-enable navigation
+            self._update_batch_file_indicator()
+    
+    def get_prompt_for_file(self, file_index):
+        """Get the context prompt for a specific file"""
+        if self.use_same_prompt.get() or not self._batch_prompts:
+            return self.context_entry.get("1.0", tk.END).strip()
+        
+        if 0 <= file_index < len(self._batch_prompts):
+            return self._batch_prompts[file_index]
+        return ""
     
     def get_batch_files(self):
         """Get list of files to process"""
@@ -3764,6 +3901,7 @@ else:
                         break
                     
                     self.batch_index = i + 1
+                    self._current_file_index = i  # Store for per-file context
                     self.root.after(0, lambda idx=i+1, total=self.batch_total, name=file_path.name: 
                                    self.log(f"\n📄 Processing file {idx}/{total}: {name}"))
                     
@@ -3779,9 +3917,9 @@ else:
                     
                     # For frozen EXE, run whisper via subprocess
                     if getattr(sys, 'frozen', False):
-                        self._run_transcription_subprocess_single(str(file_path))
+                        self._run_transcription_subprocess_single(str(file_path), file_index=i)
                     else:
-                        self._run_transcription_direct_single(str(file_path))
+                        self._run_transcription_direct_single(str(file_path), file_index=i)
                 
                 # Clear batch label when done
                 self.root.after(0, lambda: self.batch_file_label.config(text=""))
@@ -3827,9 +3965,9 @@ else:
     def _run_transcription_subprocess(self):
         """Run transcription via subprocess (for frozen EXE) - single file from UI"""
         video_file = self.video_path.get()
-        self._run_transcription_subprocess_single(video_file)
+        self._run_transcription_subprocess_single(video_file, file_index=None)
     
-    def _run_transcription_subprocess_single(self, video_file):
+    def _run_transcription_subprocess_single(self, video_file, file_index=None):
         """Run transcription via subprocess for a single file"""
         output_dir = self.output_dir.get()
         
@@ -4017,7 +4155,10 @@ print("DONE", flush=True)
         ]
         
         # Add context/prompt if provided
-        context = self.context_prompt.get().strip()
+        if file_index is not None:
+            context = self.get_prompt_for_file(file_index)
+        else:
+            context = self.context_prompt.get().strip()
         if context:
             cmd.extend(['--initial_prompt', context])
             self.log(f"Using context: {context[:100]}{'...' if len(context) > 100 else ''}\n")
@@ -4295,9 +4436,9 @@ print("DONE", flush=True)
     def _run_transcription_direct(self):
         """Run transcription directly (for running as script) - single file from UI"""
         video_file = self.video_path.get()
-        self._run_transcription_direct_single(video_file)
+        self._run_transcription_direct_single(video_file, file_index=None)
     
-    def _run_transcription_direct_single(self, video_file):
+    def _run_transcription_direct_single(self, video_file, file_index=None):
         """Run transcription directly for a single file"""
         try:
             import whisper
@@ -4409,7 +4550,10 @@ print("DONE", flush=True)
                 transcribe_options['hallucination_silence_threshold'] = self.hallucination_silence_threshold.get()
             
             # Add context/prompt if provided
-            context = self.context_prompt.get().strip()
+            if file_index is not None:
+                context = self.get_prompt_for_file(file_index)
+            else:
+                context = self.context_prompt.get().strip()
             if context:
                 transcribe_options['initial_prompt'] = context
                 self.log(f"Using context: {context[:100]}{'...' if len(context) > 100 else ''}\n")
