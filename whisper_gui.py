@@ -1488,8 +1488,8 @@ class WhisperGUI:
         self.log_text.tag_configure('error', foreground='#f14c4c')        # Red for errors ❌
         self.log_text.tag_configure('warning', foreground='#cca700')      # Yellow/orange for warnings ⚠️
         self.log_text.tag_configure('info', foreground='#3794ff')         # Blue for info 📥 💡
-        self.log_text.tag_configure('timestamp', foreground='#9a6dd7')    # Darker purple for timestamps
-        self.log_text.tag_configure('transcript', foreground='#c586c0')   # Lighter purple/pink for transcript text
+        self.log_text.tag_configure('timestamp', foreground='#6a4c93')    # Dark purple for timestamps
+        self.log_text.tag_configure('transcript', foreground='#9d7cd8')   # Lighter purple for transcript text
         self.log_text.tag_configure('header', foreground='#569cd6')       # Blue for headers/separators
         self.log_text.tag_configure('dim', foreground='#6a6a6a')          # Dim gray for less important info
         
