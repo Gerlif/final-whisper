@@ -24,10 +24,18 @@ Final Whisper is a desktop application that automatically generates high-quality
 - GPU acceleration for faster processing
 - Multi-language support (optimized for English and Danish but supports all Whisper languages)
 - Real-time progress tracking with animated UI
+- **Anti-hallucination settings** to reduce repetitive/looping text errors
+
+### 📁 Batch Processing
+- **Process multiple files** at once with the "File(s)" button
+- **Process entire folders** with the "Folder" button
+- Sequential processing with progress tracking (e.g., "File 2/5")
+- Stop button cancels entire batch
 
 ### 🔍 AI Proofreading (Optional)
 - Integration with Claude (Anthropic API) for post-transcription corrections
 - Fixes common transcription errors and improves subtitle quality
+- Automatic retry with rate limit handling
 
 ---
 
@@ -35,16 +43,14 @@ Final Whisper is a desktop application that automatically generates high-quality
 
 ### Option 1: Download Pre-built EXE (Recommended)
 
-1. Download the latest `Final Whisper.exe` from [Releases](https://github.com/Gerlif/final-whisper/releases/latest)
-2. Install Whisper dependencies:
+1. Download `FinalWhisper.exe` from [Releases](https://github.com/Gerlif/final-whisper/releases/latest)
+2. Install OpenAI Whisper:
    ```bash
    pip install openai-whisper
    ```
-3. (Optional) For GPU acceleration:
-   ```bash
-   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-   ```
-4. Run `Final Whisper.exe`
+3. Run `FinalWhisper.exe`
+
+> **Note:** The app will prompt you to set up GPU acceleration on first run if you have an NVIDIA GPU.
 
 ### Option 2: Run from Source
 
@@ -68,15 +74,15 @@ Final Whisper is a desktop application that automatically generates high-quality
 
 ## 🚀 Usage
 
-1. **Select Video File** - Choose your video file (supports any format Whisper can process)
-2. **Choose Output Folder** - Where the SRT file will be saved
+1. **Select Input** - Choose a single file, multiple files, or an entire folder
+2. **Choose Output Folder** - Where the SRT files will be saved
 3. **Configure Settings** (optional):
    - Select Whisper model (larger = more accurate but slower)
    - Choose language
    - Adjust subtitle formatting rules
    - Enable AI proofreading (requires Anthropic API key)
 4. **Click "Start Transcription"** - Watch the progress in real-time
-5. **Done!** - Your SRT file is ready to use
+5. **Done!** - Your SRT file(s) are ready to use
 
 ---
 
@@ -88,12 +94,20 @@ Final Whisper is a desktop application that automatically generates high-quality
 - **Minimum characters before split**: Prevents splitting too early in a sentence
 - **Minimum subtitle length**: Merges very short subtitles with neighbors
 
+### Anti-Hallucination Settings
+Whisper can sometimes produce repetitive or looping text. These settings help prevent that:
+- **Condition on previous text**: Toggle off to reduce looping hallucinations
+- **No speech threshold**: Adjusts silence detection sensitivity (0.0-1.0)
+- **Hallucination silence threshold**: Detects and handles silent hallucinations
+
 ### AI Proofreading
 Enable optional AI proofreading to improve transcription accuracy:
 1. Get an API key from [Anthropic](https://console.anthropic.com/)
 2. Enable "AI proofreading" in the GUI
 3. Enter your API key
 4. Claude Sonnet will review and correct the transcription
+
+The proofreading feature includes automatic retry with exponential backoff if rate limited.
 
 ---
 
