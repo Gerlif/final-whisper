@@ -1506,8 +1506,9 @@ class WhisperGUI:
         self.stop_btn.pack(side=tk.LEFT, expand=True, fill=tk.X)
         
         # Batch file label (shown during processing) - Text widget for mixed formatting
+        # sv_ttk dark theme background is #1c1c1c
         self.batch_file_label = tk.Text(left_frame, height=1, width=60, 
-                                        bg='#1e1e1e', fg='#d4d4d4', 
+                                        bg='#1c1c1c', fg='#d4d4d4', 
                                         relief='flat', font=('Segoe UI', 9),
                                         highlightthickness=0, borderwidth=0,
                                         pady=0, padx=0)
@@ -1521,8 +1522,9 @@ class WhisperGUI:
         self.progress.grid(row=7, column=0, sticky=(tk.W, tk.E), pady=(0, 4))
         
         # Progress label as Text widget for colored segments
+        # sv_ttk dark theme background is #1c1c1c
         self.progress_label = tk.Text(left_frame, height=1, width=70, 
-                                      bg='#1e1e1e', fg='#d4d4d4', 
+                                      bg='#1c1c1c', fg='#d4d4d4', 
                                       relief='flat', font=('Segoe UI', 10),
                                       highlightthickness=0, pady=2, padx=0,
                                       borderwidth=0)
