@@ -744,8 +744,9 @@ def merge_tiny_segments(subtitles, max_chars):
     Preserves word-level timing by using start of first and end of last.
     
     Rules:
-    - Merge segments with 1-3 words that don't end sentences
-    - Prefer merging with PREVIOUS (more natural flow)
+    - Merge segments with 1-4 words that don't end sentences
+    - Always merge single words (even with punctuation)
+    - Allow slight overflow (10%) to avoid orphans
     - Do multiple passes until no more merges possible
     """
     if len(subtitles) <= 1:
@@ -755,21 +756,30 @@ def merge_tiny_segments(subtitles, max_chars):
         return len(text.split())
     
     def is_sentence_end(text):
-        return text.strip().endswith(('.', '?', '!', '"'))
+        text = text.strip()
+        # Only consider it a sentence end if it's more than 2 words
+        return text.endswith(('.', '?', '!')) and word_count(text) > 2
     
     def should_merge(text):
         """Check if this subtitle should be merged with a neighbor"""
         words = word_count(text)
-        # Merge if 1-3 words and doesn't end a sentence
-        if words <= 3 and not is_sentence_end(text):
+        text = text.strip()
+        
+        # Always merge 1-2 word segments
+        if words <= 2:
             return True
-        # Also merge single words even if they end sentences (like "standards.")
-        if words == 1:
+        
+        # Merge 3-4 word segments that don't end a sentence
+        if words <= 4 and not is_sentence_end(text):
             return True
+            
         return False
     
+    # Allow 10% overflow to avoid orphans
+    max_chars_with_overflow = int(max_chars * 1.1)
+    
     # Multiple passes to catch chains of short segments
-    for _ in range(3):
+    for pass_num in range(5):  # More passes
         merged = []
         i = 0
         changes_made = False
@@ -778,16 +788,16 @@ def merge_tiny_segments(subtitles, max_chars):
             current = subtitles[i]
             
             if should_merge(current['text']):
-                merged_successfully = False
-                
                 # Try to merge with PREVIOUS first (better for natural flow)
                 if merged:
                     prev = merged[-1]
-                    combined = prev['text'] + ' ' + current['text']
-                    if len(combined) <= max_chars:
+                    combined = prev['text'].strip() + ' ' + current['text'].strip()
+                    
+                    # Allow merge if within limit (with overflow allowance)
+                    if len(combined) <= max_chars_with_overflow:
                         merged[-1] = {
                             'start': prev['start'],
-                            'end': current['end'],  # Use end time of current
+                            'end': current['end'],
                             'text': combined
                         }
                         i += 1
@@ -797,10 +807,11 @@ def merge_tiny_segments(subtitles, max_chars):
                 # Try to merge with NEXT
                 if i + 1 < len(subtitles):
                     next_sub = subtitles[i + 1]
-                    combined = current['text'] + ' ' + next_sub['text']
-                    if len(combined) <= max_chars:
+                    combined = current['text'].strip() + ' ' + next_sub['text'].strip()
+                    
+                    if len(combined) <= max_chars_with_overflow:
                         merged.append({
-                            'start': current['start'],  # Use start time of current
+                            'start': current['start'],
                             'end': next_sub['end'],
                             'text': combined
                         })
