@@ -470,18 +470,26 @@ class GradientProgressBar(tk.Canvas):
         return super().__getitem__(key)
 
 
-def split_balanced_lines(text, max_chars):
+def split_balanced_lines(text, max_chars, max_lines=2):
     """
     Split text into balanced lines with max character limit.
     Top line slightly longer if needed. Never splits words.
-    Handles very long text by splitting into multiple lines if needed.
+    NEVER returns more than max_lines (default 2).
+    If text is too long, allows slight overflow rather than adding lines.
     """
     words = text.split()
+    
+    if not words:
+        return [text] if text else []
     
     if len(text) <= max_chars:
         return [text]
     
-    # Try to split into two lines first
+    if max_lines == 1:
+        # Single line mode - just return the text (may overflow)
+        return [text]
+    
+    # Try to split into two balanced lines
     best_split = 0
     best_score = float('inf')
     
@@ -489,53 +497,48 @@ def split_balanced_lines(text, max_chars):
         line1 = ' '.join(words[:i])
         line2 = ' '.join(words[i:])
         
-        # Both lines must be within limit
+        # Both lines should ideally be within limit
         if len(line1) > max_chars or len(line2) > max_chars:
-            continue
+            # Still consider this split but with a penalty
+            over1 = max(0, len(line1) - max_chars)
+            over2 = max(0, len(line2) - max_chars)
+            overflow_penalty = (over1 + over2) * 10
+        else:
+            overflow_penalty = 0
         
         # Score: prefer balanced lines, with slight preference for top line longer
         diff = abs(len(line1) - len(line2))
-        # Add small penalty if bottom line is longer (we prefer top line longer)
         if len(line2) > len(line1):
-            score = diff + 0.5
+            score = diff + 0.5 + overflow_penalty
         else:
-            score = diff
+            score = diff + overflow_penalty
         
         if score < best_score:
             best_score = score
             best_split = i
     
-    # If we found a valid 2-line split, use it
-    if best_split > 0:
-        line1 = ' '.join(words[:best_split])
-        line2 = ' '.join(words[best_split:])
+    # If no good split found, put more words on line 1
+    if best_split == 0:
+        # Find split point that keeps line 1 close to max_chars
+        char_count = 0
+        for i, word in enumerate(words):
+            if i > 0:
+                char_count += 1  # space
+            char_count += len(word)
+            if char_count > max_chars and i > 0:
+                best_split = i
+                break
+        if best_split == 0:
+            best_split = len(words) - 1 if len(words) > 1 else 1
+    
+    line1 = ' '.join(words[:best_split])
+    line2 = ' '.join(words[best_split:])
+    
+    # Return exactly 2 lines (or 1 if line2 is empty)
+    if line2:
         return [line1, line2]
-    
-    # Text is too long for 2 lines - split into chunks that fit
-    lines = []
-    current_line = []
-    current_length = 0
-    
-    for word in words:
-        word_length = len(word)
-        # +1 for space if not first word in line
-        space = 1 if current_line else 0
-        
-        if current_length + space + word_length <= max_chars:
-            current_line.append(word)
-            current_length += space + word_length
-        else:
-            # Save current line and start new one
-            if current_line:
-                lines.append(' '.join(current_line))
-            current_line = [word]
-            current_length = word_length
-    
-    # Don't forget the last line
-    if current_line:
-        lines.append(' '.join(current_line))
-    
-    return lines if lines else [text]
+    else:
+        return [line1]
 
 
 # Words that shouldn't end a subtitle (conjunctions, articles, prepositions, auxiliaries)
@@ -593,52 +596,14 @@ def is_orphan_word(word_text):
 
 def generate_smart_srt(result, output_file, max_chars_per_line=42, max_lines=2):
     """
-    Generate SRT file from Whisper result using Whisper's built-in writer.
-    Uses max_line_width and max_line_count for proper line formatting.
+    Generate SRT file from Whisper result with proper line splitting.
+    Uses word-level timestamps to split long segments.
     
     Args:
         result: Whisper transcription result (with word_timestamps=True)
         output_file: Path to output SRT file
         max_chars_per_line: Maximum characters per line (default 42)
         max_lines: Maximum lines per subtitle (default 2)
-    """
-    from pathlib import Path
-    
-    try:
-        from whisper.utils import get_writer
-        
-        output_path = Path(output_file)
-        output_dir = str(output_path.parent)
-        
-        # Whisper's writer options
-        writer_options = {
-            "max_line_width": max_chars_per_line,
-            "max_line_count": max_lines,
-            "highlight_words": False
-        }
-        
-        # Get the SRT writer
-        srt_writer = get_writer("srt", output_dir)
-        
-        # Write the SRT file - Whisper expects the audio filename to derive output name
-        # We need to trick it by using a fake audio path with the right stem
-        fake_audio_path = str(output_path.parent / (output_path.stem + ".mp4"))
-        
-        srt_writer(result, fake_audio_path, writer_options)
-        
-    except ImportError:
-        # Fallback if whisper.utils is not available - use our own implementation
-        _generate_srt_fallback(result, output_file, max_chars_per_line, max_lines)
-    except Exception as e:
-        # If Whisper's writer fails, use fallback
-        print(f"Whisper writer failed ({e}), using fallback...")
-        _generate_srt_fallback(result, output_file, max_chars_per_line, max_lines)
-
-
-def _generate_srt_fallback(result, output_file, max_chars_per_line=42, max_lines=2):
-    """
-    Fallback SRT generation if Whisper's writer is not available.
-    Splits long segments into multiple subtitles if needed.
     """
     max_subtitle_chars = max_chars_per_line * max_lines
     subtitles = []
@@ -648,7 +613,7 @@ def _generate_srt_fallback(result, output_file, max_chars_per_line=42, max_lines
         if not text:
             continue
         
-        # If text fits in one subtitle (2 lines), use it directly
+        # If text fits in max subtitle size, use it directly
         if len(text) <= max_subtitle_chars:
             subtitles.append({
                 'start': segment['start'],
@@ -656,15 +621,17 @@ def _generate_srt_fallback(result, output_file, max_chars_per_line=42, max_lines
                 'text': text
             })
         else:
-            # Text is too long - split into multiple subtitles
+            # Text is too long - split using word timestamps if available
             words_data = segment.get('words', [])
             
             if words_data:
+                # Use word-level timestamps for accurate splitting
                 subtitles.extend(split_segment_by_words(
                     words_data, segment['start'], segment['end'], 
                     max_subtitle_chars
                 ))
             else:
+                # No word timestamps - split text and distribute time evenly
                 subtitles.extend(split_segment_evenly(
                     text, segment['start'], segment['end'],
                     max_subtitle_chars
@@ -673,14 +640,15 @@ def _generate_srt_fallback(result, output_file, max_chars_per_line=42, max_lines
     if not subtitles:
         return
     
-    # Write SRT file
+    # Write SRT file with balanced lines
     with open(output_file, 'w', encoding='utf-8') as f:
         for i, sub in enumerate(subtitles, 1):
             text = sub['text'].strip()
             if not text:
                 continue
             
-            lines = split_balanced_lines(text, max_chars_per_line)
+            # Balance lines for readability (never more than max_lines)
+            lines = split_balanced_lines(text, max_chars_per_line, max_lines)
             
             start_ts = format_timestamp(sub['start'])
             end_ts = format_timestamp(sub['end'])
