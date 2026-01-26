@@ -3608,8 +3608,8 @@ else:
         )
         if filenames:
             if len(filenames) == 1:
-                # Single file
-                self.video_path.set(filenames[0])
+                # Single file - normalize path for consistent display
+                self.video_path.set(str(Path(filenames[0])))
                 self.selected_files = None  # Clear batch list
                 input_dir = str(Path(filenames[0]).parent)
                 self.output_dir.set(input_dir)
