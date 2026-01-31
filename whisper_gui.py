@@ -1206,14 +1206,15 @@ class WhisperGUI:
             import os
             import sys
             
-            # Possible logo locations
-            logo_paths = [
-                'logo.png',
-                os.path.join(os.path.dirname(__file__), 'logo.png'),
-                os.path.join(os.path.dirname(sys.executable), 'logo.png'),
-            ]
+            # Possible logo locations - _MEIPASS first for bundled EXE
+            logo_paths = []
             if hasattr(sys, '_MEIPASS'):
-                logo_paths.insert(0, os.path.join(sys._MEIPASS, 'logo.png'))
+                logo_paths.append(os.path.join(sys._MEIPASS, 'logo.png'))
+            logo_paths.extend([
+                'logo.png',
+                os.path.join(os.path.dirname(__file__) if '__file__' in dir() else '.', 'logo.png'),
+                os.path.join(os.path.dirname(sys.executable), 'logo.png'),
+            ])
             
             logo_loaded = False
             for logo_path in logo_paths:
@@ -2750,7 +2751,16 @@ for code, name in sorted(langs.items(), key=lambda x: x[1]):
             self.log("📦 Installing OpenAI Whisper...")
             self.log("="*60 + "\n")
             
+            # Change to a safe directory to avoid Python file conflicts
+            # (e.g., user having types.py in Downloads folder)
+            original_cwd = os.getcwd()
+            safe_dir = os.path.expandvars('%TEMP%') if os.name == 'nt' else '/tmp'
+            
             try:
+                if os.path.exists(safe_dir):
+                    os.chdir(safe_dir)
+                    self.log(f"Working directory: {safe_dir}")
+                
                 # Use --progress-bar off for cleaner output, we'll show our own status
                 process = subprocess.Popen(
                     ['py', '-m', 'pip', 'install', '--user', '--progress-bar', 'off', 'openai-whisper'],
@@ -2760,6 +2770,7 @@ for code, name in sorted(langs.items(), key=lambda x: x[1]):
                     encoding='utf-8',
                     errors='replace',
                     bufsize=1,
+                    cwd=safe_dir,  # Also set cwd for subprocess
                     creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
                 )
                 
@@ -2767,6 +2778,14 @@ for code, name in sorted(langs.items(), key=lambda x: x[1]):
                 for line in process.stdout:
                     line = line.rstrip()
                     if not line:
+                        continue
+                    
+                    # Check for common import errors that indicate file conflicts
+                    if "cannot import name" in line and "consider renaming" in line:
+                        self.log(line)
+                        self.log("\n⚠️ This error is caused by a Python file in your folder")
+                        self.log("that has the same name as a Python standard library module.")
+                        self.log("Please find and rename the conflicting file, then try again.")
                         continue
                     
                     # Skip some noisy lines
@@ -2802,6 +2821,12 @@ for code, name in sorted(langs.items(), key=lambda x: x[1]):
             except Exception as e:
                 self.log(f"\n❌ Error: {e}")
                 self.root.after(0, lambda: self._on_install_failed("Whisper"))
+            finally:
+                # Restore original working directory
+                try:
+                    os.chdir(original_cwd)
+                except:
+                    pass
         
         threading.Thread(target=install, daemon=True).start()
     

@@ -53,6 +53,7 @@ a = Analysis(
         'PIL',
         'PIL.Image',
         'PIL.ImageTk',
+        'PIL._tkinter_finder',
         'encodings',
         'encodings.utf_8',
         'encodings.cp1252',
