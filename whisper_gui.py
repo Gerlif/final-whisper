@@ -3123,7 +3123,14 @@ else:
             
             update_status("Starting installation...")
             
+            # Change to a safe directory to avoid Python file conflicts
+            original_cwd = os.getcwd()
+            safe_dir = os.path.expandvars('%TEMP%') if os.name == 'nt' else '/tmp'
+            
             try:
+                if os.path.exists(safe_dir):
+                    os.chdir(safe_dir)
+                
                 process = subprocess.Popen(
                     ['py', '-m', 'pip', 'install', '--user', '--progress-bar', 'off', 'torch', 'torchaudio'],
                     stdout=subprocess.PIPE,
@@ -3132,6 +3139,7 @@ else:
                     encoding='utf-8',
                     errors='replace',
                     bufsize=1,
+                    cwd=safe_dir,
                     creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
                 )
                 
@@ -3172,6 +3180,12 @@ else:
                 self.log(f"\n❌ Error: {e}")
                 self.root.after(0, lambda: self.pytorch_install_btn.config(
                     state='normal', text='🔄 Retry Install'))
+            finally:
+                # Restore original working directory
+                try:
+                    os.chdir(original_cwd)
+                except:
+                    pass
         
         threading.Thread(target=install, daemon=True).start()
     
@@ -3197,7 +3211,14 @@ else:
             
             update_status("Starting installation... (this may take a few minutes)")
             
+            # Change to a safe directory to avoid Python file conflicts
+            original_cwd = os.getcwd()
+            safe_dir = os.path.expandvars('%TEMP%') if os.name == 'nt' else '/tmp'
+            
             try:
+                if os.path.exists(safe_dir):
+                    os.chdir(safe_dir)
+                
                 # Install PyTorch with CUDA 12.1 support
                 process = subprocess.Popen(
                     ['py', '-m', 'pip', 'install', '--user', '--progress-bar', 'off', 'torch', 'torchaudio', 
@@ -3208,6 +3229,7 @@ else:
                     encoding='utf-8',
                     errors='replace',
                     bufsize=1,
+                    cwd=safe_dir,
                     creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
                 )
                 
@@ -3248,6 +3270,12 @@ else:
                 self.log(f"\n❌ Error: {e}")
                 self.root.after(0, lambda: self.pytorch_install_btn.config(
                     state='normal', text='🔄 Retry Install'))
+            finally:
+                # Restore original working directory
+                try:
+                    os.chdir(original_cwd)
+                except:
+                    pass
         
         threading.Thread(target=install, daemon=True).start()
     
@@ -3395,7 +3423,14 @@ else:
         self.log(f"Python executable: {python_exe}\n")
 
         def install():
+            # Change to a safe directory to avoid Python file conflicts
+            original_cwd = os.getcwd()
+            safe_dir = os.path.expandvars('%TEMP%') if os.name == 'nt' else '/tmp'
+            
             try:
+                if os.path.exists(safe_dir):
+                    os.chdir(safe_dir)
+                
                 self.root.after(0, lambda: self.log("Installation thread started..."))
                 # Detect CUDA version
                 self.log("Detecting CUDA version...")
@@ -3442,7 +3477,7 @@ else:
                 self.log("\nUninstalling CPU-only PyTorch...")
                 uninstall_result = subprocess.run(
                     [python_exe, "-m", "pip", "uninstall", "-y", "torch", "torchvision", "torchaudio"],
-                    capture_output=True, text=True
+                    capture_output=True, text=True, cwd=safe_dir
                 )
                 if uninstall_result.returncode == 0:
                     self.log("✓ Uninstall complete")
@@ -3467,7 +3502,8 @@ else:
                     stderr=subprocess.STDOUT,
                     text=True,
                     bufsize=1,
-                    universal_newlines=True
+                    universal_newlines=True,
+                    cwd=safe_dir
                 )
 
                 # Stream output - collect and log periodically
@@ -3528,6 +3564,11 @@ else:
                 # Always clear the installation flag
                 self._installing_gpu = False
                 self.root.after(0, lambda: self.log("Installation thread finished."))
+                # Restore original working directory
+                try:
+                    os.chdir(original_cwd)
+                except:
+                    pass
 
         threading.Thread(target=install, daemon=True).start()
 
