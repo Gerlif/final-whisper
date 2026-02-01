@@ -957,6 +957,13 @@ class WhisperGUI:
             'site_packages': _found_site_packages if getattr(sys, 'frozen', False) else []
         }
         
+        # Log logo debug info if logo failed to load
+        if hasattr(self, '_logo_debug') and self._logo_debug:
+            if not self.logo_image:
+                self.log("⚠️ Logo not loaded. Debug info:")
+                for line in self._logo_debug:
+                    self.log(f"   {line}")
+        
         if '--install-gpu' in sys.argv:
             self.log(f"Running as Administrator")
         self.log("")  # Blank line for readability
@@ -1202,22 +1209,40 @@ class WhisperGUI:
         
         # Load and display logo (left side, smaller, vertically centered)
         self.logo_image = None
+        logo_debug = []  # Collect debug info
         try:
             import os
             import sys
             
             # Possible logo locations - _MEIPASS first for bundled EXE
             logo_paths = []
-            if hasattr(sys, '_MEIPASS'):
+            
+            # PyInstaller bundle location (highest priority)
+            if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
                 logo_paths.append(os.path.join(sys._MEIPASS, 'logo.png'))
-            logo_paths.extend([
-                'logo.png',
-                os.path.join(os.path.dirname(__file__) if '__file__' in dir() else '.', 'logo.png'),
-                os.path.join(os.path.dirname(sys.executable), 'logo.png'),
-            ])
+                logo_debug.append(f"_MEIPASS: {sys._MEIPASS}")
+            
+            # Same directory as executable
+            if getattr(sys, 'frozen', False):
+                exe_dir = os.path.dirname(sys.executable)
+                logo_paths.append(os.path.join(exe_dir, 'logo.png'))
+                logo_debug.append(f"exe_dir: {exe_dir}")
+            
+            # Script directory (for non-frozen)
+            try:
+                script_dir = os.path.dirname(os.path.abspath(__file__))
+                logo_paths.append(os.path.join(script_dir, 'logo.png'))
+                logo_debug.append(f"script_dir: {script_dir}")
+            except NameError:
+                pass  # __file__ not defined in frozen EXE
+            
+            # Current working directory
+            logo_paths.append(os.path.join(os.getcwd(), 'logo.png'))
+            logo_paths.append('logo.png')
             
             logo_loaded = False
             for logo_path in logo_paths:
+                logo_debug.append(f"Checking: {logo_path} - exists: {os.path.exists(logo_path)}")
                 if os.path.exists(logo_path):
                     try:
                         from PIL import Image, ImageTk
@@ -1230,8 +1255,10 @@ class WhisperGUI:
                         logo_label = ttk.Label(header_frame, image=self.logo_image)
                         logo_label.pack(side=tk.LEFT, padx=(0, 15), pady=(5, 5))
                         logo_loaded = True
+                        logo_debug.append(f"SUCCESS: Loaded with PIL from {logo_path}")
                         break
-                    except ImportError:
+                    except ImportError as e:
+                        logo_debug.append(f"PIL ImportError: {e}")
                         # PIL not available, try with tk.PhotoImage (PNG only, no resize)
                         try:
                             self.logo_image = tk.PhotoImage(file=logo_path)
@@ -1240,13 +1267,20 @@ class WhisperGUI:
                             logo_label = ttk.Label(header_frame, image=self.logo_image)
                             logo_label.pack(side=tk.LEFT, padx=(0, 15), pady=(5, 5))
                             logo_loaded = True
+                            logo_debug.append(f"SUCCESS: Loaded with tk.PhotoImage from {logo_path}")
                             break
-                        except Exception:
-                            pass
-                    except Exception:
-                        pass
-        except Exception:
-            pass  # Logo is optional
+                        except Exception as e2:
+                            logo_debug.append(f"tk.PhotoImage error: {e2}")
+                    except Exception as e:
+                        logo_debug.append(f"Error loading {logo_path}: {e}")
+            
+            if not logo_loaded:
+                logo_debug.append("Logo not loaded from any path")
+                # Store debug info for later display in log
+                self._logo_debug = logo_debug
+        except Exception as e:
+            logo_debug.append(f"Outer exception: {e}")
+            self._logo_debug = logo_debug
         
         # Title (right of logo)
         title_frame = ttk.Frame(header_frame)

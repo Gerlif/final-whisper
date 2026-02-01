@@ -31,8 +31,34 @@ jobs:
           pip install sv-ttk
           pip install Pillow
       
+      - name: Verify files exist
+        run: |
+          echo "Current directory:"
+          pwd
+          echo ""
+          echo "Files in directory:"
+          dir
+          echo ""
+          echo "Checking required files:"
+          if (Test-Path "logo.png") { echo "✓ logo.png found" } else { echo "✗ logo.png MISSING" }
+          if (Test-Path "icon.ico") { echo "✓ icon.ico found" } else { echo "✗ icon.ico MISSING" }
+          if (Test-Path "version.txt") { echo "✓ version.txt found" } else { echo "✗ version.txt MISSING" }
+          if (Test-Path "whisper_gui.py") { echo "✓ whisper_gui.py found" } else { echo "✗ whisper_gui.py MISSING" }
+      
       - name: Build EXE
-        run: python build_exe.py
+        run: |
+          python build_exe.py
+      
+      - name: Verify EXE built
+        run: |
+          if (Test-Path "dist/FinalWhisper.exe") { 
+            echo "✓ FinalWhisper.exe built successfully"
+            $size = (Get-Item "dist/FinalWhisper.exe").Length / 1MB
+            echo "  Size: $([math]::Round($size, 2)) MB"
+          } else { 
+            echo "✗ FinalWhisper.exe NOT FOUND"
+            exit 1
+          }
       
       - name: Upload EXE to Release
         if: github.event_name == 'release'
