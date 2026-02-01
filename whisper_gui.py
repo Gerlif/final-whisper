@@ -981,13 +981,11 @@ class WhisperGUI:
                     continue
             
             if python_found:
-                # Check if it's a problematic version
+                # Store Python version for reference
                 if python_version:
                     try:
                         major, minor = map(int, python_version.split('.')[:2])
-                        if major == 3 and minor >= 13:
-                            self.log(f"⚠️ Python {python_version} detected (some packages may have limited support)")
-                        elif major == 3 and minor < 10:
+                        if major == 3 and minor < 10:
                             self.log(f"⚠️ Python {python_version} detected (Python 3.10+ recommended)")
                     except:
                         pass
@@ -5018,6 +5016,11 @@ print("DONE", flush=True)
             # Set up environment with UTF-8 encoding
             env = os.environ.copy()
             env['PYTHONIOENCODING'] = 'utf-8'
+            
+            # Add FFmpeg to PATH if we found it in a non-standard location
+            if hasattr(self, '_ffmpeg_path') and self._ffmpeg_path:
+                current_path = env.get('PATH', '')
+                env['PATH'] = self._ffmpeg_path + os.pathsep + current_path
             
             # Hide console window on Windows
             startupinfo = None
