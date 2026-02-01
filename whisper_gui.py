@@ -2630,14 +2630,36 @@ for code, name in sorted(langs.items(), key=lambda x: x[1]):
             return lang_value.split(':')[0].strip()
         return lang_value
     
-    def check_whisper_installation(self):
+    def check_whisper_installation(self, retry_count=0):
         """Check if Whisper is installed and install if missing"""
         def check():
             # For frozen EXE, use subprocess to avoid Python version conflicts
             if getattr(sys, 'frozen', False):
                 try:
+                    # Use -s to skip user site-packages check, then explicitly check
+                    # Use a more robust check that handles user site-packages
+                    check_script = '''
+import sys
+import subprocess
+try:
+    import whisper
+    print("OK")
+except ImportError:
+    # Try to find it in user site-packages
+    import site
+    site.ENABLE_USER_SITE = True
+    if hasattr(site, 'getusersitepackages'):
+        user_site = site.getusersitepackages()
+        if user_site not in sys.path:
+            sys.path.insert(0, user_site)
+    try:
+        import whisper
+        print("OK")
+    except ImportError:
+        print("NOT_FOUND")
+'''
                     result = _run_hidden(
-                        ['py', '-c', 'import whisper; print("OK")'],
+                        ['py', '-c', check_script],
                         capture_output=True, text=True, timeout=30
                     )
                     if result.returncode == 0 and "OK" in result.stdout:
@@ -2646,6 +2668,19 @@ for code, name in sorted(langs.items(), key=lambda x: x[1]):
                         self.root.after(0, self.check_gpu_availability)
                         return
                     else:
+                        # Log error for debugging
+                        if result.returncode != 0:
+                            stderr = result.stderr.strip() if result.stderr else ""
+                            self.log(f"   Whisper check returned code {result.returncode}")
+                            if stderr:
+                                self.log(f"   {stderr[:150]}")
+                        
+                        # Retry once after a delay
+                        if retry_count < 1:
+                            self.log("   Retrying whisper check...")
+                            self.root.after(2000, lambda: self.check_whisper_installation(retry_count + 1))
+                            return
+                        
                         self.log("⚠️ Whisper not found")
                 except subprocess.TimeoutExpired:
                     self.log("⚠️ Whisper check timed out")
@@ -2901,7 +2936,7 @@ for code, name in sorted(langs.items(), key=lambda x: x[1]):
         # Now check GPU/PyTorch
         self.check_gpu_availability()
     
-    def check_gpu_availability(self):
+    def check_gpu_availability(self, retry_count=0):
         """Check if GPU is available for Whisper"""
         def check():
             gpu_ready = False
@@ -2910,20 +2945,43 @@ for code, name in sorted(langs.items(), key=lambda x: x[1]):
             if getattr(sys, 'frozen', False):
                 self.log("Checking GPU availability...")
                 try:
+                    # More robust check that handles user site-packages
+                    check_script = '''
+import sys
+import site
+# Ensure user site-packages is in path
+site.ENABLE_USER_SITE = True
+if hasattr(site, 'getusersitepackages'):
+    user_site = site.getusersitepackages()
+    if user_site not in sys.path:
+        sys.path.insert(0, user_site)
+
+try:
+    import torch
+    if torch.cuda.is_available():
+        print("GPU:" + torch.cuda.get_device_name(0))
+    else:
+        print("CPU_ONLY")
+except ImportError:
+    print("NOT_FOUND")
+except Exception as e:
+    print("ERROR:" + str(e))
+'''
                     result = _run_hidden(
-                        ['py', '-c', '''
-import torch
-if torch.cuda.is_available():
-    print("GPU:" + torch.cuda.get_device_name(0))
-else:
-    print("CPU_ONLY")
-'''],
+                        ['py', '-c', check_script],
                         capture_output=True, text=True, timeout=60
                     )
                     
                     output = result.stdout.strip()
+                    stderr = result.stderr.strip() if result.stderr else ""
                     
-                    if result.returncode == 0 and output.startswith("GPU:"):
+                    # Debug: log the actual output
+                    if result.returncode != 0:
+                        self.log(f"   PyTorch check returned code {result.returncode}")
+                        if stderr:
+                            self.log(f"   stderr: {stderr[:200]}")
+                    
+                    if output.startswith("GPU:"):
                         gpu_name = output[4:]  # Remove "GPU:" prefix
                         self.device_info.set(f"✅ GPU: {gpu_name}")
                         self.use_gpu.set(True)
@@ -2935,13 +2993,32 @@ else:
                         self.log("⚠️ PyTorch installed but without CUDA support")
                         if self.check_nvidia_gpu():
                             self.root.after(0, self._show_gpu_install_button)
-                    else:
-                        # PyTorch not installed or error
+                    elif "NOT_FOUND" in output:
+                        # PyTorch not installed - retry once after a delay
+                        if retry_count < 2:
+                            self.log(f"   Retrying GPU check... (attempt {retry_count + 2})")
+                            self.root.after(2000, lambda: self.check_gpu_availability(retry_count + 1))
+                            return
+                        
                         self.device_info.set("⚠️ PyTorch not installed")
                         self.use_gpu.set(False)
                         self.log("⚠️ PyTorch not found")
-                        # Show PyTorch install button
-                        self.root.after(0, self._show_pytorch_install_button)
+                        # Show PyTorch install button only if NVIDIA GPU exists
+                        if self.check_nvidia_gpu():
+                            self.root.after(0, self._show_pytorch_install_button)
+                    else:
+                        # Unknown output or error
+                        if retry_count < 2:
+                            self.log(f"   Retrying GPU check... (attempt {retry_count + 2})")
+                            self.root.after(2000, lambda: self.check_gpu_availability(retry_count + 1))
+                            return
+                        
+                        self.device_info.set("⚠️ PyTorch not installed")
+                        self.use_gpu.set(False)
+                        self.log(f"⚠️ PyTorch check output: {output[:100]}")
+                        if self.check_nvidia_gpu():
+                            self.root.after(0, self._show_pytorch_install_button)
+                            
                 except subprocess.TimeoutExpired:
                     self.device_info.set("⚠️ GPU check timed out")
                     self.use_gpu.set(False)
