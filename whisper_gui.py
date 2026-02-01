@@ -921,8 +921,12 @@ class WhisperGUI:
         self.load_settings()
         
         self.create_widgets()
-        self.check_whisper_installation()
-        # Note: check_gpu_availability() is called by check_whisper_installation() 
+        
+        # Check if Python is available on the system (required for Whisper/PyTorch)
+        self.check_python_installation()
+        # Note: check_whisper_installation() is called by check_python_installation()
+        # after confirming Python is available
+        # And check_gpu_availability() is called by check_whisper_installation() 
         # after confirming Whisper is installed (or after Whisper is installed)
 
         # Check for updates after a delay (let initialization complete first)
@@ -944,6 +948,160 @@ class WhisperGUI:
                     "The app was supposed to restart with admin rights, but elevation failed.\n\n"
                     "GPU installation requires administrator privileges.\n\n"
                     "Please right-click Final Whisper.exe and select 'Run as administrator'.")
+    
+    def check_python_installation(self):
+        """Check if Python is available on the system"""
+        def check():
+            # Only need to check for frozen EXE - script mode already has Python
+            if not getattr(sys, 'frozen', False):
+                self.root.after(0, self.check_whisper_installation)
+                return
+            
+            # Try to find Python
+            python_cmds = ['py', 'python', 'python3']
+            python_found = False
+            python_version = None
+            
+            for py_cmd in python_cmds:
+                try:
+                    result = _run_hidden(
+                        [py_cmd, '--version'],
+                        capture_output=True, text=True, timeout=10
+                    )
+                    if result.returncode == 0:
+                        python_found = True
+                        # Parse version from "Python 3.11.4" etc.
+                        version_str = result.stdout.strip() or result.stderr.strip()
+                        if version_str.startswith('Python '):
+                            python_version = version_str.split()[1]
+                        break
+                except FileNotFoundError:
+                    continue
+                except Exception:
+                    continue
+            
+            if python_found:
+                # Check if it's a problematic version
+                if python_version:
+                    try:
+                        major, minor = map(int, python_version.split('.')[:2])
+                        if major == 3 and minor >= 13:
+                            self.log(f"⚠️ Python {python_version} detected (some packages may have limited support)")
+                        elif major == 3 and minor < 10:
+                            self.log(f"⚠️ Python {python_version} detected (Python 3.10+ recommended)")
+                    except:
+                        pass
+                
+                # Python found, continue to Whisper check
+                self.root.after(0, self.check_whisper_installation)
+            else:
+                # Python not found - show installation prompt
+                self.log("❌ Python not found on this system")
+                self.log("")
+                self.log("Python is required for transcription.")
+                self.log("Please install Python 3.10, 3.11, or 3.12 from python.org")
+                self.log("")
+                self.root.after(0, self._show_python_install_prompt)
+        
+        threading.Thread(target=check, daemon=True).start()
+    
+    def _show_python_install_prompt(self):
+        """Show a prominent message to install Python"""
+        # Collapse all sections
+        if hasattr(self, 'files_section'):
+            self.files_section.collapse()
+        if hasattr(self, 'transcription_section'):
+            self.transcription_section.collapse()
+        if hasattr(self, 'model_section'):
+            self.model_section.collapse()
+        if hasattr(self, 'subtitle_section'):
+            self.subtitle_section.collapse()
+        if hasattr(self, 'ai_section'):
+            self.ai_section.collapse()
+        
+        # Disable start button
+        self.process_btn.config(state='disabled')
+        
+        # Create setup frame at the top
+        self.python_frame = ttk.Frame(self.left_panel)
+        self.python_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 15))
+        
+        # Shift all sections down
+        if hasattr(self, 'files_section'):
+            self.files_section.grid(row=1)
+        if hasattr(self, 'transcription_section'):
+            self.transcription_section.grid(row=2)
+        if hasattr(self, 'model_section'):
+            self.model_section.grid(row=3)
+        if hasattr(self, 'subtitle_section'):
+            self.subtitle_section.grid(row=4)
+        if hasattr(self, 'ai_section'):
+            self.ai_section.grid(row=5)
+        
+        # Setup message
+        setup_label = ttk.Label(
+            self.python_frame,
+            text="⚠️ Python Required",
+            font=('Segoe UI', 14, 'bold')
+        )
+        setup_label.pack(pady=(10, 5))
+        
+        info_label = ttk.Label(
+            self.python_frame,
+            text="Python is required for transcription.\nPlease install Python 3.10, 3.11, or 3.12 (recommended).\nAvoid Python 3.13 as some packages aren't fully compatible yet.",
+            justify=tk.CENTER
+        )
+        info_label.pack(pady=(0, 15))
+        
+        # Button frame
+        btn_frame = ttk.Frame(self.python_frame)
+        btn_frame.pack(pady=(0, 10))
+        
+        # Download Python button
+        def open_python_download():
+            import webbrowser
+            webbrowser.open('https://www.python.org/downloads/')
+        
+        download_btn = ttk.Button(
+            btn_frame,
+            text="📥 Download Python",
+            command=open_python_download,
+            style='Accent.TButton'
+        )
+        download_btn.pack(side=tk.LEFT, padx=5)
+        
+        # Retry button
+        def retry_check():
+            self.python_frame.destroy()
+            delattr(self, 'python_frame')
+            # Restore section positions
+            if hasattr(self, 'files_section'):
+                self.files_section.grid(row=0)
+            if hasattr(self, 'transcription_section'):
+                self.transcription_section.grid(row=1)
+            if hasattr(self, 'model_section'):
+                self.model_section.grid(row=2)
+            if hasattr(self, 'subtitle_section'):
+                self.subtitle_section.grid(row=3)
+            if hasattr(self, 'ai_section'):
+                self.ai_section.grid(row=4)
+            # Re-check
+            self.check_python_installation()
+        
+        retry_btn = ttk.Button(
+            btn_frame,
+            text="🔄 I've Installed Python - Retry",
+            command=retry_check
+        )
+        retry_btn.pack(side=tk.LEFT, padx=5)
+        
+        # Installation tips
+        tips_label = ttk.Label(
+            self.python_frame,
+            text="💡 Tip: During installation, make sure to check 'Add Python to PATH'",
+            foreground='gray'
+        )
+        tips_label.pack(pady=(10, 5))
     
     def log_startup_diagnostics(self):
         """Log diagnostic information at startup"""
