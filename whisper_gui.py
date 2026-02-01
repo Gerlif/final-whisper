@@ -3320,7 +3320,30 @@ for code, name in sorted(langs.items(), key=lambda x: x[1]):
                 if os.path.exists(safe_dir):
                     os.chdir(safe_dir)
                 
-                # First try to install torch + torchaudio
+                # First uninstall existing torch to ensure clean CUDA install
+                self.log("Removing existing PyTorch installation...")
+                update_status("Removing existing PyTorch...")
+                
+                uninstall_process = subprocess.Popen(
+                    ['py', '-m', 'pip', 'uninstall', '-y', 'torch', 'torchaudio', 'torchvision'],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding='utf-8',
+                    errors='replace',
+                    cwd=safe_dir,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                )
+                for line in uninstall_process.stdout:
+                    line = line.rstrip()
+                    if line and not line.startswith('  '):
+                        self.log(line)
+                uninstall_process.wait()
+                
+                self.log("\nInstalling PyTorch with CUDA support...")
+                update_status("Installing PyTorch with CUDA...")
+                
+                # Now install torch + torchaudio with CUDA
                 # If torchaudio fails (e.g., Python 3.13), install just torch
                 process = subprocess.Popen(
                     ['py', '-m', 'pip', 'install', '--user', '--progress-bar', 'off', 'torch', 'torchaudio', 
