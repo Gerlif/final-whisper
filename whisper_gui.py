@@ -1108,16 +1108,17 @@ class WhisperGUI:
         def check():
             ffmpeg_found = False
             ffmpeg_version = None
+            ffmpeg_path = None
             
+            # First try the simple PATH check
             try:
-                # Try to run ffmpeg -version
                 result = _run_hidden(
                     ['ffmpeg', '-version'],
                     capture_output=True, text=True, timeout=10
                 )
                 if result.returncode == 0:
                     ffmpeg_found = True
-                    # Parse version from first line like "ffmpeg version 6.0 ..."
+                    ffmpeg_path = "PATH"
                     first_line = result.stdout.split('\n')[0] if result.stdout else ""
                     if 'version' in first_line.lower():
                         parts = first_line.split()
@@ -1130,11 +1131,59 @@ class WhisperGUI:
             except Exception:
                 pass
             
+            # If not in PATH, check common installation locations
+            if not ffmpeg_found:
+                common_paths = [
+                    # winget installs
+                    os.path.expandvars(r'%LOCALAPPDATA%\Microsoft\WinGet\Links\ffmpeg.exe'),
+                    os.path.expandvars(r'%LOCALAPPDATA%\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-*\bin\ffmpeg.exe'),
+                    # Chocolatey
+                    r'C:\ProgramData\chocolatey\bin\ffmpeg.exe',
+                    # Scoop
+                    os.path.expandvars(r'%USERPROFILE%\scoop\shims\ffmpeg.exe'),
+                    # Manual installs
+                    r'C:\ffmpeg\bin\ffmpeg.exe',
+                    r'C:\Program Files\ffmpeg\bin\ffmpeg.exe',
+                    r'C:\Program Files (x86)\ffmpeg\bin\ffmpeg.exe',
+                ]
+                
+                import glob
+                for pattern in common_paths:
+                    matches = glob.glob(pattern)
+                    for path in matches:
+                        if os.path.isfile(path):
+                            try:
+                                result = _run_hidden(
+                                    [path, '-version'],
+                                    capture_output=True, text=True, timeout=10
+                                )
+                                if result.returncode == 0:
+                                    ffmpeg_found = True
+                                    ffmpeg_path = path
+                                    first_line = result.stdout.split('\n')[0] if result.stdout else ""
+                                    if 'version' in first_line.lower():
+                                        parts = first_line.split()
+                                        for i, p in enumerate(parts):
+                                            if p.lower() == 'version' and i + 1 < len(parts):
+                                                ffmpeg_version = parts[i + 1]
+                                                break
+                                    break
+                            except:
+                                pass
+                    if ffmpeg_found:
+                        break
+            
             if ffmpeg_found:
                 if ffmpeg_version:
                     self.log(f"✅ FFmpeg {ffmpeg_version} found")
                 else:
                     self.log("✅ FFmpeg found")
+                
+                # Store the path if we found it outside PATH (for use in transcription)
+                if ffmpeg_path and ffmpeg_path != "PATH":
+                    self._ffmpeg_path = os.path.dirname(ffmpeg_path)
+                    self.log(f"   Location: {ffmpeg_path}")
+                
                 # Continue to Whisper check
                 self.root.after(0, self.check_whisper_installation)
             else:
@@ -1262,9 +1311,11 @@ class WhisperGUI:
                         creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
                     )
                     
+                    output_lines = []
                     for line in process.stdout:
                         line = line.rstrip()
                         if line:
+                            output_lines.append(line)
                             self.log(line)
                             # Update status with progress
                             if 'Downloading' in line:
@@ -1276,9 +1327,21 @@ class WhisperGUI:
                     
                     process.wait()
                     
-                    if process.returncode == 0:
-                        self.log("\n✅ FFmpeg installed successfully!")
-                        self.log("Note: You may need to restart the app for PATH changes to take effect.\n")
+                    # Check output for "already installed" message
+                    output_text = '\n'.join(output_lines)
+                    already_installed = any(x in output_text.lower() for x in [
+                        'already installed',
+                        'no available upgrade',
+                        'no newer package'
+                    ])
+                    
+                    if process.returncode == 0 or already_installed:
+                        if already_installed:
+                            self.log("\n✅ FFmpeg is already installed!")
+                            self.log("The app needs to restart to detect it.\n")
+                        else:
+                            self.log("\n✅ FFmpeg installed successfully!")
+                            self.log("Note: You may need to restart the app for PATH changes to take effect.\n")
                         self.root.after(0, self._on_ffmpeg_installed)
                         return
                     else:
