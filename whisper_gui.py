@@ -3496,38 +3496,20 @@ for code, name in sorted(langs.items(), key=lambda x: x[1]):
                         pass
                 
                 if is_python_313_plus:
-                    self.log(f"⚠️ Python {python_version} detected")
-                    self.log("   PyTorch CUDA wheels are not yet available for Python 3.13+")
-                    self.log("")
-                    self.log("Options:")
-                    self.log("   1. Use CPU-only mode (slower but works)")
-                    self.log("   2. Install Python 3.11 or 3.12 for GPU acceleration")
-                    self.log("")
-                    update_status("CUDA not available for Python 3.13+")
-                    
-                    # Show message box with options
-                    def show_options():
-                        result = messagebox.askquestion(
-                            "Python 3.13 - Limited GPU Support",
-                            f"PyTorch with CUDA is not yet available for Python {python_version}.\n\n"
-                            "Your options:\n"
-                            "• YES - Continue with CPU-only mode (works but slower)\n"
-                            "• NO - Cancel and install Python 3.11/3.12 for GPU support\n\n"
-                            "Continue with CPU-only mode?",
-                            icon='warning'
-                        )
-                        if result == 'yes':
-                            # Re-install CPU PyTorch and continue
-                            self.log("Continuing with CPU-only mode...")
-                            self._reinstall_cpu_pytorch()
-                        else:
-                            self.log("Installation cancelled.")
-                            self.log("Install Python 3.11 or 3.12 from python.org for GPU support.")
-                            if hasattr(self, 'pytorch_install_btn'):
-                                self.pytorch_install_btn.config(state='normal', text='🔄 Retry Install')
-                    
-                    self.root.after(0, show_options)
-                    return
+                    self.log(f"Python {python_version} detected - using newer CUDA index")
+                    # Python 3.13+ needs newer CUDA builds (cu126, cu128, or cu129)
+                    # Try cu128 first as it's most widely compatible
+                    cuda_indexes = [
+                        ('cu128', 'CUDA 12.8'),
+                        ('cu126', 'CUDA 12.6'),
+                        ('cu129', 'CUDA 12.9'),
+                    ]
+                else:
+                    # Older Python can use cu121
+                    cuda_indexes = [
+                        ('cu121', 'CUDA 12.1'),
+                        ('cu118', 'CUDA 11.8'),
+                    ]
                 
                 # First uninstall existing torch to ensure clean CUDA install
                 self.log("Removing existing PyTorch installation...")
@@ -3549,65 +3531,17 @@ for code, name in sorted(langs.items(), key=lambda x: x[1]):
                         self.log(line)
                 uninstall_process.wait()
                 
-                self.log("\nInstalling PyTorch with CUDA support...")
-                update_status("Installing PyTorch with CUDA...")
-                
-                # Now install torch + torchaudio with CUDA
-                # If torchaudio fails (e.g., Python 3.13), install just torch
-                process = subprocess.Popen(
-                    ['py', '-m', 'pip', 'install', '--user', '--progress-bar', 'off', 'torch', 'torchaudio', 
-                     '--index-url', 'https://download.pytorch.org/whl/cu121'],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    encoding='utf-8',
-                    errors='replace',
-                    bufsize=1,
-                    cwd=safe_dir,
-                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
-                )
-                
-                current_package = ""
-                torchaudio_failed = False
-                for line in process.stdout:
-                    line = line.rstrip()
-                    if not line:
-                        continue
+                # Try each CUDA index until one works
+                install_success = False
+                for cuda_index, cuda_name in cuda_indexes:
+                    index_url = f'https://download.pytorch.org/whl/{cuda_index}'
+                    self.log(f"\nTrying {cuda_name} ({cuda_index})...")
+                    update_status(f"Installing PyTorch with {cuda_name}...")
                     
-                    # Check if torchaudio is not available
-                    if 'No matching distribution found for torchaudio' in line or 'Could not find a version that satisfies the requirement torchaudio' in line:
-                        torchaudio_failed = True
-                    
-                    if line.startswith('  ') and 'Uninstalling' not in line and 'Installing' not in line:
-                        continue
-                    
-                    self.log(line)
-                    
-                    if 'Collecting' in line:
-                        pkg = line.replace('Collecting ', '').split()[0]
-                        current_package = pkg
-                        update_status(f"Collecting {pkg}...")
-                    elif 'Downloading' in line:
-                        import re
-                        size_match = re.search(r'\(([^)]+)\)', line)
-                        size_info = f" ({size_match.group(1)})" if size_match else ""
-                        update_status(f"Downloading {current_package}{size_info}...")
-                    elif 'Installing collected packages' in line:
-                        update_status("Installing packages...")
-                    elif 'Successfully installed' in line:
-                        update_status("Installation complete!")
-                
-                process.wait()
-                
-                # If torchaudio failed, try installing just torch
-                if process.returncode != 0 and torchaudio_failed:
-                    self.log("\n⚠️ torchaudio not available for your Python version")
-                    self.log("Installing PyTorch without torchaudio...")
-                    update_status("Installing PyTorch (without torchaudio)...")
-                    
-                    process2 = subprocess.Popen(
+                    # Try to install torch (without torchaudio first for speed)
+                    process = subprocess.Popen(
                         ['py', '-m', 'pip', 'install', '--user', '--progress-bar', 'off', 'torch',
-                         '--index-url', 'https://download.pytorch.org/whl/cu121'],
+                         '--index-url', index_url],
                         stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT,
                         text=True,
@@ -3618,31 +3552,72 @@ for code, name in sorted(langs.items(), key=lambda x: x[1]):
                         creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
                     )
                     
-                    for line in process2.stdout:
+                    current_package = ""
+                    no_matching_dist = False
+                    for line in process.stdout:
                         line = line.rstrip()
                         if not line:
                             continue
+                        
+                        # Check if torch is not available for this index
+                        if 'No matching distribution found for torch' in line or 'Could not find a version that satisfies the requirement torch' in line:
+                            no_matching_dist = True
+                        
                         if line.startswith('  ') and 'Uninstalling' not in line and 'Installing' not in line:
                             continue
+                        
                         self.log(line)
+                        
+                        if 'Collecting' in line:
+                            pkg = line.replace('Collecting ', '').split()[0]
+                            current_package = pkg
+                            update_status(f"Collecting {pkg}...")
+                        elif 'Downloading' in line:
+                            import re
+                            size_match = re.search(r'\(([^)]+)\)', line)
+                            size_info = f" ({size_match.group(1)})" if size_match else ""
+                            update_status(f"Downloading {current_package}{size_info}...")
+                        elif 'Installing collected packages' in line:
+                            update_status("Installing packages...")
+                        elif 'Successfully installed' in line:
+                            update_status("Installation complete!")
                     
-                    process2.wait()
+                    process.wait()
                     
-                    if process2.returncode == 0:
-                        self.log("\n✅ PyTorch with CUDA installed successfully!")
-                        self.log("Note: torchaudio was skipped (not available for Python 3.13+)")
-                        self.root.after(0, self._on_pytorch_installed)
+                    if process.returncode == 0:
+                        self.log(f"\n✅ PyTorch with {cuda_name} installed successfully!")
+                        install_success = True
+                        break
+                    elif no_matching_dist:
+                        self.log(f"   {cuda_name} not available for Python {python_version}, trying next...")
+                        continue
                     else:
-                        self.log(f"\n❌ Installation failed (code {process2.returncode})")
-                        self.root.after(0, lambda: self.pytorch_install_btn.config(
-                            state='normal', text='🔄 Retry Install'))
-                elif process.returncode == 0:
-                    self.log("\n✅ PyTorch with CUDA installed successfully!")
+                        self.log(f"   {cuda_name} installation failed, trying next...")
+                        continue
+                
+                if install_success:
                     self.root.after(0, self._on_pytorch_installed)
                 else:
-                    self.log(f"\n❌ Installation failed (code {process.returncode})")
-                    self.root.after(0, lambda: self.pytorch_install_btn.config(
-                        state='normal', text='🔄 Retry Install'))
+                    # All CUDA indexes failed - offer CPU fallback
+                    self.log("\n❌ No CUDA version available for your Python/system configuration")
+                    self.log("You can still use CPU-only mode (slower but works)")
+                    
+                    def offer_cpu_fallback():
+                        result = messagebox.askquestion(
+                            "CUDA Installation Failed",
+                            "Could not find a compatible CUDA version of PyTorch.\n\n"
+                            "Would you like to install the CPU-only version instead?\n"
+                            "(Transcription will work but be slower)",
+                            icon='warning'
+                        )
+                        if result == 'yes':
+                            self._reinstall_cpu_pytorch()
+                        else:
+                            if hasattr(self, 'pytorch_install_btn'):
+                                self.pytorch_install_btn.config(state='normal', text='🔄 Retry Install')
+                    
+                    self.root.after(0, offer_cpu_fallback)
+                    
             except Exception as e:
                 self.log(f"\n❌ Error: {e}")
                 self.root.after(0, lambda: self.pytorch_install_btn.config(
