@@ -992,8 +992,8 @@ class WhisperGUI:
                     except:
                         pass
                 
-                # Python found, continue to Whisper check
-                self.root.after(0, self.check_whisper_installation)
+                # Python found, continue to FFmpeg check
+                self.root.after(0, self.check_ffmpeg_installation)
             else:
                 # Python not found - show installation prompt
                 self.log("❌ Python not found on this system")
@@ -1102,6 +1102,304 @@ class WhisperGUI:
             foreground='gray'
         )
         tips_label.pack(pady=(10, 5))
+    
+    def check_ffmpeg_installation(self):
+        """Check if FFmpeg is available on the system"""
+        def check():
+            ffmpeg_found = False
+            ffmpeg_version = None
+            
+            try:
+                # Try to run ffmpeg -version
+                result = _run_hidden(
+                    ['ffmpeg', '-version'],
+                    capture_output=True, text=True, timeout=10
+                )
+                if result.returncode == 0:
+                    ffmpeg_found = True
+                    # Parse version from first line like "ffmpeg version 6.0 ..."
+                    first_line = result.stdout.split('\n')[0] if result.stdout else ""
+                    if 'version' in first_line.lower():
+                        parts = first_line.split()
+                        for i, p in enumerate(parts):
+                            if p.lower() == 'version' and i + 1 < len(parts):
+                                ffmpeg_version = parts[i + 1]
+                                break
+            except FileNotFoundError:
+                pass
+            except Exception:
+                pass
+            
+            if ffmpeg_found:
+                if ffmpeg_version:
+                    self.log(f"✅ FFmpeg {ffmpeg_version} found")
+                else:
+                    self.log("✅ FFmpeg found")
+                # Continue to Whisper check
+                self.root.after(0, self.check_whisper_installation)
+            else:
+                # FFmpeg not found - show installation prompt
+                self.log("❌ FFmpeg not found")
+                self.log("")
+                self.log("FFmpeg is required to process audio/video files.")
+                self.log("")
+                self.root.after(0, self._show_ffmpeg_install_prompt)
+        
+        threading.Thread(target=check, daemon=True).start()
+    
+    def _show_ffmpeg_install_prompt(self):
+        """Show a prominent message to install FFmpeg"""
+        # Collapse all sections
+        if hasattr(self, 'files_section'):
+            self.files_section.collapse()
+        if hasattr(self, 'transcription_section'):
+            self.transcription_section.collapse()
+        if hasattr(self, 'model_section'):
+            self.model_section.collapse()
+        if hasattr(self, 'subtitle_section'):
+            self.subtitle_section.collapse()
+        if hasattr(self, 'ai_section'):
+            self.ai_section.collapse()
+        
+        # Disable start button
+        self.process_btn.config(state='disabled')
+        
+        # Create setup frame at the top
+        self.ffmpeg_frame = ttk.Frame(self.left_panel)
+        self.ffmpeg_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 15))
+        
+        # Shift all sections down
+        if hasattr(self, 'files_section'):
+            self.files_section.grid(row=1)
+        if hasattr(self, 'transcription_section'):
+            self.transcription_section.grid(row=2)
+        if hasattr(self, 'model_section'):
+            self.model_section.grid(row=3)
+        if hasattr(self, 'subtitle_section'):
+            self.subtitle_section.grid(row=4)
+        if hasattr(self, 'ai_section'):
+            self.ai_section.grid(row=5)
+        
+        # Setup message
+        setup_label = ttk.Label(
+            self.ffmpeg_frame,
+            text="⚠️ FFmpeg Required",
+            font=('Segoe UI', 14, 'bold')
+        )
+        setup_label.pack(pady=(10, 5))
+        
+        info_label = ttk.Label(
+            self.ffmpeg_frame,
+            text="FFmpeg is required to process audio and video files.\nClick the button below to install it automatically.",
+            justify=tk.CENTER
+        )
+        info_label.pack(pady=(0, 15))
+        
+        # Button frame
+        btn_frame = ttk.Frame(self.ffmpeg_frame)
+        btn_frame.pack(pady=(0, 10))
+        
+        # Install FFmpeg button
+        self.ffmpeg_install_btn = ttk.Button(
+            btn_frame,
+            text="📥 Install FFmpeg",
+            command=self._install_ffmpeg,
+            style='Accent.TButton'
+        )
+        self.ffmpeg_install_btn.pack(side=tk.LEFT, padx=5)
+        
+        # Manual download button (fallback)
+        def open_ffmpeg_download():
+            import webbrowser
+            webbrowser.open('https://www.gyan.dev/ffmpeg/builds/')
+        
+        manual_btn = ttk.Button(
+            btn_frame,
+            text="🌐 Manual Download",
+            command=open_ffmpeg_download
+        )
+        manual_btn.pack(side=tk.LEFT, padx=5)
+        
+        # Status label for installation progress
+        self.ffmpeg_status_label = ttk.Label(
+            self.ffmpeg_frame,
+            text="",
+            foreground='gray'
+        )
+        self.ffmpeg_status_label.pack(pady=(10, 5))
+    
+    def _install_ffmpeg(self):
+        """Install FFmpeg using winget"""
+        self.ffmpeg_install_btn.config(state='disabled', text='⏳ Installing FFmpeg...')
+        self.ffmpeg_status_label.config(text="This may take a minute...")
+        
+        def install():
+            self.log("\n" + "="*60)
+            self.log("📦 Installing FFmpeg...")
+            self.log("="*60 + "\n")
+            
+            # Try winget first (Windows 10/11)
+            try:
+                # Check if winget is available
+                winget_check = _run_hidden(
+                    ['winget', '--version'],
+                    capture_output=True, text=True, timeout=10
+                )
+                
+                if winget_check.returncode == 0:
+                    self.log("Using Windows Package Manager (winget)...")
+                    self.root.after(0, lambda: self.ffmpeg_status_label.config(
+                        text="Installing via Windows Package Manager..."))
+                    
+                    # Install FFmpeg via winget
+                    process = subprocess.Popen(
+                        ['winget', 'install', 'Gyan.FFmpeg', '--accept-package-agreements', '--accept-source-agreements'],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        encoding='utf-8',
+                        errors='replace',
+                        creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                    )
+                    
+                    for line in process.stdout:
+                        line = line.rstrip()
+                        if line:
+                            self.log(line)
+                            # Update status with progress
+                            if 'Downloading' in line:
+                                self.root.after(0, lambda: self.ffmpeg_status_label.config(
+                                    text="Downloading FFmpeg..."))
+                            elif 'Installing' in line:
+                                self.root.after(0, lambda: self.ffmpeg_status_label.config(
+                                    text="Installing FFmpeg..."))
+                    
+                    process.wait()
+                    
+                    if process.returncode == 0:
+                        self.log("\n✅ FFmpeg installed successfully!")
+                        self.log("Note: You may need to restart the app for PATH changes to take effect.\n")
+                        self.root.after(0, self._on_ffmpeg_installed)
+                        return
+                    else:
+                        self.log(f"\n⚠️ winget installation returned code {process.returncode}")
+                        # Fall through to try other methods
+                else:
+                    self.log("winget not available, trying alternative method...")
+            except FileNotFoundError:
+                self.log("winget not found, trying alternative method...")
+            except Exception as e:
+                self.log(f"winget error: {e}")
+            
+            # Try choco (Chocolatey) as fallback
+            try:
+                choco_check = _run_hidden(
+                    ['choco', '--version'],
+                    capture_output=True, text=True, timeout=10
+                )
+                
+                if choco_check.returncode == 0:
+                    self.log("Using Chocolatey...")
+                    self.root.after(0, lambda: self.ffmpeg_status_label.config(
+                        text="Installing via Chocolatey..."))
+                    
+                    process = subprocess.Popen(
+                        ['choco', 'install', 'ffmpeg', '-y'],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        encoding='utf-8',
+                        errors='replace',
+                        creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                    )
+                    
+                    for line in process.stdout:
+                        line = line.rstrip()
+                        if line:
+                            self.log(line)
+                    
+                    process.wait()
+                    
+                    if process.returncode == 0:
+                        self.log("\n✅ FFmpeg installed successfully!")
+                        self.root.after(0, self._on_ffmpeg_installed)
+                        return
+            except FileNotFoundError:
+                pass
+            except Exception:
+                pass
+            
+            # All automatic methods failed
+            self.log("\n❌ Automatic installation failed")
+            self.log("Please install FFmpeg manually from: https://www.gyan.dev/ffmpeg/builds/")
+            self.root.after(0, lambda: self.ffmpeg_install_btn.config(
+                state='normal', text='🔄 Retry Install'))
+            self.root.after(0, lambda: self.ffmpeg_status_label.config(
+                text="Automatic install failed. Please use Manual Download."))
+        
+        threading.Thread(target=install, daemon=True).start()
+    
+    def _on_ffmpeg_installed(self):
+        """Called after FFmpeg is successfully installed"""
+        # Update status
+        self.ffmpeg_status_label.config(text="✅ Installed! Checking...")
+        
+        # Give Windows a moment to update PATH, then verify
+        def verify_and_continue():
+            # Try to find ffmpeg now
+            try:
+                result = _run_hidden(
+                    ['ffmpeg', '-version'],
+                    capture_output=True, text=True, timeout=10
+                )
+                if result.returncode == 0:
+                    self.log("✅ FFmpeg verified and working!")
+                    # Remove install frame and continue
+                    if hasattr(self, 'ffmpeg_frame'):
+                        self.ffmpeg_frame.destroy()
+                        delattr(self, 'ffmpeg_frame')
+                    
+                    # Restore section positions
+                    if hasattr(self, 'files_section'):
+                        self.files_section.grid(row=0)
+                    if hasattr(self, 'transcription_section'):
+                        self.transcription_section.grid(row=1)
+                    if hasattr(self, 'model_section'):
+                        self.model_section.grid(row=2)
+                    if hasattr(self, 'subtitle_section'):
+                        self.subtitle_section.grid(row=3)
+                    if hasattr(self, 'ai_section'):
+                        self.ai_section.grid(row=4)
+                    
+                    # Continue to Whisper check
+                    self.check_whisper_installation()
+                    return
+            except:
+                pass
+            
+            # FFmpeg not in PATH yet - need restart
+            self.ffmpeg_status_label.config(
+                text="✅ Installed! Please restart the app for changes to take effect.")
+            self.ffmpeg_install_btn.config(
+                state='normal', text='🔄 Restart App')
+            self.ffmpeg_install_btn.config(command=self._restart_app)
+        
+        self.root.after(1000, verify_and_continue)
+    
+    def _restart_app(self):
+        """Restart the application"""
+        import sys
+        import os
+        
+        if getattr(sys, 'frozen', False):
+            # Running as EXE
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+        else:
+            # Running as script
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+        
+        # Fallback: just close and let user reopen
+        self.root.quit()
     
     def log_startup_diagnostics(self):
         """Log diagnostic information at startup"""
