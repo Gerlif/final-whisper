@@ -1242,37 +1242,37 @@ class WhisperGUI:
             
             logo_loaded = False
             for logo_path in logo_paths:
-                logo_debug.append(f"Checking: {logo_path} - exists: {os.path.exists(logo_path)}")
-                if os.path.exists(logo_path):
+                exists = os.path.exists(logo_path)
+                logo_debug.append(f"Checking: {logo_path} - exists: {exists}")
+                if exists:
+                    # Try tk.PhotoImage FIRST (more compatible, especially with Python 3.13)
                     try:
-                        from PIL import Image, ImageTk
-                        img = Image.open(logo_path)
-                        # Resize to ~65% of original (was 180x65, now ~117x42)
-                        new_width = int(img.width * 0.65)
-                        new_height = int(img.height * 0.65)
-                        img = img.resize((new_width, new_height), Image.LANCZOS)
-                        self.logo_image = ImageTk.PhotoImage(img)
+                        self.logo_image = tk.PhotoImage(file=logo_path)
+                        # Subsample to make it smaller (approximate 65% reduction)
+                        self.logo_image = self.logo_image.subsample(2, 2)
                         logo_label = ttk.Label(header_frame, image=self.logo_image)
                         logo_label.pack(side=tk.LEFT, padx=(0, 15), pady=(5, 5))
                         logo_loaded = True
-                        logo_debug.append(f"SUCCESS: Loaded with PIL from {logo_path}")
+                        logo_debug.append(f"SUCCESS: Loaded with tk.PhotoImage from {logo_path}")
                         break
-                    except ImportError as e:
-                        logo_debug.append(f"PIL ImportError: {e}")
-                        # PIL not available, try with tk.PhotoImage (PNG only, no resize)
+                    except Exception as tk_err:
+                        logo_debug.append(f"tk.PhotoImage error: {tk_err}")
+                        # Fall back to PIL
                         try:
-                            self.logo_image = tk.PhotoImage(file=logo_path)
-                            # Subsample to make it smaller (approximate 65% reduction)
-                            self.logo_image = self.logo_image.subsample(2, 2)
+                            from PIL import Image, ImageTk
+                            img = Image.open(logo_path)
+                            # Resize to ~65% of original
+                            new_width = int(img.width * 0.65)
+                            new_height = int(img.height * 0.65)
+                            img = img.resize((new_width, new_height), Image.LANCZOS)
+                            self.logo_image = ImageTk.PhotoImage(img)
                             logo_label = ttk.Label(header_frame, image=self.logo_image)
                             logo_label.pack(side=tk.LEFT, padx=(0, 15), pady=(5, 5))
                             logo_loaded = True
-                            logo_debug.append(f"SUCCESS: Loaded with tk.PhotoImage from {logo_path}")
+                            logo_debug.append(f"SUCCESS: Loaded with PIL from {logo_path}")
                             break
-                        except Exception as e2:
-                            logo_debug.append(f"tk.PhotoImage error: {e2}")
-                    except Exception as e:
-                        logo_debug.append(f"Error loading {logo_path}: {e}")
+                        except Exception as pil_err:
+                            logo_debug.append(f"PIL error: {pil_err}")
             
             if not logo_loaded:
                 logo_debug.append("Logo not loaded from any path")
@@ -3253,7 +3253,8 @@ else:
                 if os.path.exists(safe_dir):
                     os.chdir(safe_dir)
                 
-                # Install PyTorch with CUDA 12.1 support
+                # First try to install torch + torchaudio
+                # If torchaudio fails (e.g., Python 3.13), install just torch
                 process = subprocess.Popen(
                     ['py', '-m', 'pip', 'install', '--user', '--progress-bar', 'off', 'torch', 'torchaudio', 
                      '--index-url', 'https://download.pytorch.org/whl/cu121'],
@@ -3268,10 +3269,16 @@ else:
                 )
                 
                 current_package = ""
+                torchaudio_failed = False
                 for line in process.stdout:
                     line = line.rstrip()
                     if not line:
                         continue
+                    
+                    # Check if torchaudio is not available
+                    if 'No matching distribution found for torchaudio' in line or 'Could not find a version that satisfies the requirement torchaudio' in line:
+                        torchaudio_failed = True
+                    
                     if line.startswith('  ') and 'Uninstalling' not in line and 'Installing' not in line:
                         continue
                     
@@ -3293,7 +3300,44 @@ else:
                 
                 process.wait()
                 
-                if process.returncode == 0:
+                # If torchaudio failed, try installing just torch
+                if process.returncode != 0 and torchaudio_failed:
+                    self.log("\n⚠️ torchaudio not available for your Python version")
+                    self.log("Installing PyTorch without torchaudio...")
+                    update_status("Installing PyTorch (without torchaudio)...")
+                    
+                    process2 = subprocess.Popen(
+                        ['py', '-m', 'pip', 'install', '--user', '--progress-bar', 'off', 'torch',
+                         '--index-url', 'https://download.pytorch.org/whl/cu121'],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        encoding='utf-8',
+                        errors='replace',
+                        bufsize=1,
+                        cwd=safe_dir,
+                        creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                    )
+                    
+                    for line in process2.stdout:
+                        line = line.rstrip()
+                        if not line:
+                            continue
+                        if line.startswith('  ') and 'Uninstalling' not in line and 'Installing' not in line:
+                            continue
+                        self.log(line)
+                    
+                    process2.wait()
+                    
+                    if process2.returncode == 0:
+                        self.log("\n✅ PyTorch with CUDA installed successfully!")
+                        self.log("Note: torchaudio was skipped (not available for Python 3.13+)")
+                        self.root.after(0, self._on_pytorch_installed)
+                    else:
+                        self.log(f"\n❌ Installation failed (code {process2.returncode})")
+                        self.root.after(0, lambda: self.pytorch_install_btn.config(
+                            state='normal', text='🔄 Retry Install'))
+                elif process.returncode == 0:
                     self.log("\n✅ PyTorch with CUDA installed successfully!")
                     self.root.after(0, self._on_pytorch_installed)
                 else:
